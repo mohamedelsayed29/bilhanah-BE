@@ -1,0 +1,39 @@
+import { resolve } from 'node:path';
+import { defineConfig } from 'vitest/config';
+
+// E2E tests use the local Docker services but an isolated database
+// (bilhanah_test) and Redis logical database 1, so development data is untouched.
+try {
+  process.loadEnvFile(resolve(import.meta.dirname, '../../.env'));
+} catch {
+  // CI provides variables directly.
+}
+
+const databaseUrl = new URL(process.env['DATABASE_URL'] ?? 'postgresql://bilhanah:bilhanah_dev_password@127.0.0.1:55432/bilhanah');
+process.env['TEST_ADMIN_DATABASE_URL'] = databaseUrl.toString();
+databaseUrl.pathname = '/bilhanah_test';
+const redisUrl = new URL(process.env['REDIS_URL'] ?? 'redis://127.0.0.1:56379');
+redisUrl.pathname = '/1';
+
+Object.assign(process.env, {
+  NODE_ENV: 'test',
+  LOG_LEVEL: 'warn',
+  DATABASE_URL: databaseUrl.toString(),
+  REDIS_URL: redisUrl.toString(),
+  CORS_ORIGINS: 'http://dashboard.test',
+  DASHBOARD_URL: 'http://dashboard.test',
+  RESTAURANT_URL_TEMPLATE: 'https://{subdomain}.bilhanah.test',
+  JWT_ACCESS_SECRET: 'e2e-test-secret-that-is-at-least-32-characters',
+});
+
+export default defineConfig({
+  test: {
+    globals: true,
+    root: './',
+    include: ['test/**/*.e2e-spec.ts'],
+    globalSetup: ['./test/global-setup.ts'],
+    fileParallelism: false,
+    testTimeout: 20_000,
+    hookTimeout: 60_000,
+  },
+});
