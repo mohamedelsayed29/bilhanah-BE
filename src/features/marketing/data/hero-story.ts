@@ -2,6 +2,8 @@
 export const heroStory = {
   src: '/media/hero-live-v1.mp4',
   duration: 14.08,
+  initialChapter: 1,
+  startAt: 3.45,
   chapters: [
     { at: 0, poster: '/media/hero-live-scan.jpg', position: '48% center' },
     { at: 2.8, poster: '/media/hero-live-menu.jpg', position: '34% center' },

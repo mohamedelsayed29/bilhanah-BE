@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { ArrowLeftIcon, ArrowsClockwiseIcon, BellRingingIcon, CheckIcon, GlobeHemisphereWestIcon, PaletteIcon, QrCodeIcon, ReceiptIcon } from '@phosphor-icons/react';
 import { useLanguage } from '../../../lib/language';
-import { DemoMenu } from './DemoMenu';
+import { OrderFlowDemo } from './OrderFlowDemo';
 
 export function CapabilityStrip() {
   const { text } = useLanguage();
@@ -37,9 +37,8 @@ export function Features({ onDemo }: { onDemo: () => void }) {
     </div>
     <div className="menu-showcase">
       <div className="showcase-topline"><span>{text('منيو حلو. تجربة أحلى.', 'Good food deserves a good menu.')}</span><span className="showcase-flower"><BowlFoodMark /></span></div>
-      <div className="phone-frame"><div className="phone-camera" /><DemoMenu compact /></div>
+      <OrderFlowDemo />
       <div className="qr-stand"><QRCodeSVG value={demoUrl} size={84} fgColor="#075E54" bgColor="#FFF8EF" level="M" marginSize={0} title={text('امسح لفتح المنيو التجريبي', 'Scan to open the sample menu')} /><span>{text('سكان وبالهنا!', 'Scan. Explore. Enjoy!')}</span><button onClick={copyLink}>{copied ? <CheckIcon size={13} /> : <QrCodeIcon size={13} />}{copied ? text('اتنسخ اللينك', 'Link copied') : text('انسخ لينك التجربة', 'Copy demo link')}</button>{copyError && <small role="status">{text('افتح التجربة من الزر أسفلها.', 'Open the sample with the button below.')}</small>}</div>
-      <span className="showcase-note">{text('نموذج تفاعلي، جرّب تضيف أكلة', 'An interactive sample. Try adding a dish.')}</span>
     </div>
   </section>;
 }

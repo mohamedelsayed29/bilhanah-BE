@@ -55,3 +55,27 @@ Sample restaurant, dish names, and dish prices are illustrative demo content. No
 - `public/media/pasta.jpg`: [Unsplash source](https://images.unsplash.com/photo-1473093295043-cdd812d0e601?auto=format&fit=crop&w=700&q=85).
 - `public/media/salad.jpg`: [Unsplash source](https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=700&q=85).
 
+
+## Supplied brand logo
+
+`public/brand/bilhanah-logo-original.png` is the original 1692×930 logo supplied by the user on 2026-10-20 (attachment `codex-clipboard-6ff44897-90bd-4183-a786-4cbaf3aef285.png`). No redraw or pixel transformation is used. Origin metadata is embedded; CSS hides only the blank outer margin, using a 1507×479 display viewport beginning at source coordinates (104,231). It is preserved as the source for the SVG conversion described below. The original CSS margin crop has been replaced by the SVG’s tight viewBox.
+
+## Vector logo
+
+`public/brand/bilhanah-logo.svg` is traced locally from the supplied raster using Potrace. It contains two actual vector paths, not a base64 image wrapper. The viewBox is 1507×479, the background is transparent, and shapes use Deep Teal #075E54 and Guava #FF7868. The lettering is outlined, with no font or external asset dependency. Flat brand colors replace the raster’s texture and lighting variation; the original shape is traced rather than recreated from a font.
+
+Reproduce locally with `scripts/vectorize-logo.mjs`; its header documents temporary npm tools and the exact command. Tooling is kept outside the application’s runtime dependencies. The header and footer use this SVG.
+
+## White logo and reference composition
+
+`public/brand/bilhanah-logo-light.svg` uses the same traced paths as the teal vector logo, with the teal layer changed to white for dark/video backgrounds. Guava accents remain unchanged. `scripts/vectorize-logo.mjs` now writes both variants. Header uses the white variant; footer retains the teal variant.
+
+The layout reference was supplied by the user as `/Users/test/Downloads/Bilhanah Arabic Food-Tech Hero.png` (1586×992). It guides composition only and is not embedded as the background. The existing real filmed video remains active; initial playback seeks to the menu chapter at 3.45s. The menu frame is preloaded for the fallback/loading state. No source media or project was uploaded.
+
+## Food-truck closing campaign image
+
+- Shipping asset: `public/media/food-truck-order-ready-v1.jpg` (1672×941, about 388KB), converted lossily from the selected generated PNG without cropping.
+- Original generated file: `/Users/test/.codex/generated_images/01a1544f-62b6-7210-b0ec-18163b081e3d/exec-06529b69-6b7f-4ab7-84dd-597ce07c1747.png`. Project copy: `.impeccable/review/food-truck-order-ready-original.png`.
+- Generated using the built-in image_gen tool. Exact prompt: `.impeccable/prompts/food-truck-order-ready.txt` at the project root; also embedded in the shipping JPEG’s COM metadata.
+- User requested a food truck with an exterior QR sign, customers sitting at outdoor tables, and phones vibrating to indicate an order is ready. The image depicts this with an Arabic order-ready notification, checkmarks and restrained vibration marks. It is illustrative campaign imagery, not an actual customer photograph or proof of device behavior. The pictured QR sign is illustrative; the site’s existing sample-menu QR remains the functional demo.
+- On desktop the photograph fills the former green closing band, with existing page copy and CTA on its quiet right side. Mobile shows the scene above the existing text, preserving the truck QR and foreground phone.

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ArrowUpLeftIcon, GlobeHemisphereWestIcon, ListIcon, XIcon } from '@phosphor-icons/react';
+import { Link, NavLink } from 'react-router';
 import { Brand } from '../../../components/Brand';
 import { useLanguage } from '../../../lib/language';
 
@@ -7,16 +8,19 @@ export function Header({ onStart }: { onStart: () => void }) {
   const { text, toggleLanguage } = useLanguage();
   const [menuOpen, setMenuOpen] = useState(false);
   const links = [
-    { href: '#features', title: text('ليه بالهنا؟', 'Why Bilhanah?') },
-    { href: '#how-it-works', title: text('بتشتغل إزاي؟', 'How it works') },
-    { href: '#pricing', title: text('الباقات والأسعار', 'Plans & pricing') },
-    { href: '#faq', title: text('أسئلة شائعة', 'FAQ') },
+    { href: '/#features', title: text('ليه بالهنا؟', 'Why Bilhanah?') },
+    { href: '/#how-it-works', title: text('بتشتغل إزاي؟', 'How it works') },
+    { href: '/#pricing', title: text('الأسعار', 'Pricing') },
+    { href: '/about', title: text('عن بالهنا', 'About') },
+    { href: '/contact', title: text('تواصل معانا', 'Contact') },
   ];
   return <header className="site-header">
     <div className="header-inner">
-      <Brand />
+      <Brand inverse />
       <nav id="main-navigation" aria-label={text('التنقل الرئيسي', 'Main navigation')} className={menuOpen ? 'navigation is-open' : 'navigation'} onKeyDown={event => { if (event.key === 'Escape') setMenuOpen(false); }}>
-        {links.map(link => <a key={link.href} href={link.href} onClick={() => setMenuOpen(false)}>{link.title}</a>)}
+        {links.map(link => link.href.includes('#')
+          ? <Link key={link.href} to={link.href} onClick={() => setMenuOpen(false)}>{link.title}</Link>
+          : <NavLink key={link.href} to={link.href} className={({ isActive }) => isActive ? 'is-current' : undefined} onClick={() => setMenuOpen(false)}>{link.title}</NavLink>)}
       </nav>
       <div className="header-actions">
         <button className="language-button" onClick={toggleLanguage} aria-label={text('Switch to English', 'التبديل للعربية')}><GlobeHemisphereWestIcon size={18} /><span>{text('EN', 'عربي')}</span></button>
