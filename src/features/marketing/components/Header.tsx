@@ -4,19 +4,20 @@ import { Link, NavLink } from 'react-router';
 import { Brand } from '../../../components/Brand';
 import { useLanguage } from '../../../lib/language';
 
-export function Header({ onStart }: { onStart: () => void }) {
+export function Header({ onStart, store = false }: { onStart: () => void; store?: boolean }) {
   const { text, toggleLanguage } = useLanguage();
   const [menuOpen, setMenuOpen] = useState(false);
   const links = [
     { href: '/#features', title: text('ليه بالهنا؟', 'Why Bilhanah?') },
     { href: '/#how-it-works', title: text('بتشتغل إزاي؟', 'How it works') },
+    { href: '/shop', title: text('المتجر', 'Shop') },
     { href: '/#pricing', title: text('الأسعار', 'Pricing') },
     { href: '/about', title: text('عن بالهنا', 'About') },
     { href: '/contact', title: text('تواصل معانا', 'Contact') },
   ];
-  return <header className="site-header">
+  return <header className={`site-header ${store ? 'site-header-store' : ''}`}>
     <div className="header-inner">
-      <Brand inverse />
+      <Brand inverse={!store} />
       <nav id="main-navigation" aria-label={text('التنقل الرئيسي', 'Main navigation')} className={menuOpen ? 'navigation is-open' : 'navigation'} onKeyDown={event => { if (event.key === 'Escape') setMenuOpen(false); }}>
         {links.map(link => link.href.includes('#')
           ? <Link key={link.href} to={link.href} onClick={() => setMenuOpen(false)}>{link.title}</Link>

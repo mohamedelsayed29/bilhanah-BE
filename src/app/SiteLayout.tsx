@@ -29,6 +29,8 @@ function ScrollManager() {
 }
 
 export function SiteLayout() {
+  const { pathname } = useLocation();
+  const store = pathname === '/shop';
   const { language, text, number } = useLanguage();
   const [demoOpen, setDemoOpen] = useState(() => new URLSearchParams(location.search).get('demo') === '1');
   const [selectedPlan, setSelectedPlan] = useState<PlanId | null>(null);
@@ -37,11 +39,11 @@ export function SiteLayout() {
   const start = () => setSelectedPlan('advanced');
   return <>
     <a className="skip-link" href="#main-content">{text('انتقل للمحتوى', 'Skip to content')}</a>
-    <Header onStart={start} />
+    <Header onStart={start} store={store} />
     <ScrollManager />
     <main id="main-content">
       <Outlet context={{ start, openDemo, selectPlan: setSelectedPlan } satisfies SiteActions} />
-      <Footer onStart={start} />
+      <Footer onStart={start} showClosing={!store} />
     </main>
     <Dialog open={demoOpen} onClose={() => setDemoOpen(false)} title={text('منيو بالهنا التجريبي', 'Bilhanah sample menu')} className="demo-dialog"><DemoShowcase /></Dialog>
     <Dialog open={!!selected} onClose={() => setSelectedPlan(null)} title={text('تجربتك مع بالهنا', 'Your Bilhanah experience')} className="trial-dialog">

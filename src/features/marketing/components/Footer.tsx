@@ -3,12 +3,13 @@ import { Link } from 'react-router';
 import { Brand } from '../../../components/Brand';
 import { useLanguage } from '../../../lib/language';
 
-export function Footer({ onStart }: { onStart: () => void }) {
+export function Footer({ onStart, showClosing = true }: { onStart: () => void; showClosing?: boolean }) {
   const { language, text } = useLanguage();
   const dir = language === 'ar' ? 'rtl' : 'ltr';
   const columns = [
     { title: text('المنتج', 'Product'), links: [
       { href: '/#features', label: text('المميزات', 'Features') },
+      { href: '/shop', label: text('متجر حوامل QR وNFC', 'QR & NFC stand shop') },
       { href: '/#how-it-works', label: text('إزاي بيشتغل', 'How it works') },
       { href: '/#pricing', label: text('الباقات والأسعار', 'Plans & pricing') },
     ] },
@@ -23,14 +24,14 @@ export function Footer({ onStart }: { onStart: () => void }) {
     ] },
   ];
   return <>
-    <section id="your-next-menu" className="closing-section page-container" aria-labelledby="closing-title">
+    {showClosing && <section id="your-next-menu" className="closing-section page-container" aria-labelledby="closing-title">
       <img className="closing-image" src="/media/food-truck-order-ready-v1.jpg" width="1672" height="941" loading="lazy" decoding="async" alt={text('مشهد توضيحي لعربية أكل عليها QR وعملاء على ترابيزات خارجية، وموبايل يعرض طلبك جاهز مع علامات اهتزاز.', 'Illustrative food truck with an exterior QR sign and customers at outdoor tables. A phone shows an order-ready alert with vibration marks.')} />
       <div className="closing-shade" aria-hidden="true" />
       <div className="closing-inner">
         <div className="closing-copy" dir={dir}><h2 id="closing-title">{text('سيب انطباع حلو.', 'Make a delicious impression.')}<span>{text('من قبل أول لقمة.', 'Before the very first bite.')}</span></h2><p>{text('إنت ركّز في الأكل والضيافة. وإحنا نسهّل حكاية المنيو.', 'You focus on the food and the welcome. We’ll help with the menu.')}</p></div>
         <div className="closing-action" dir={dir}><button className="button button-guava" onClick={onStart}>{text('منيو مطعمك يبدأ من هنا', 'Your next menu starts here')}<ArrowLeftIcon className="directional-arrow" size={20} /></button><span>{text('٣٠ يوم مجانًا. خد وقتك وجرّب.', '30 days free. Make yourself at home.')}</span></div>
       </div>
-    </section>
+    </section>}
     <footer className="site-footer">
       <div className="page-container">
         <div className="footer-main">

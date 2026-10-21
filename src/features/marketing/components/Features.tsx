@@ -49,7 +49,7 @@ export function HowItWorks() {
   const { text } = useLanguage();
   const steps = [
     { title: text('ضيف لمستك', 'Make it yours'), body: text('سجّل بيانات مطعمك، ارفع اللوجو، وضيف أكلاتك بصورها وأسعارها.', 'Add your restaurant details, upload your logo, and bring your dishes to life with photos and prices.') },
-    { title: text('حط الـQR على الترابيزة', 'Put your QR on the table'), body: text('لينك باسم مطعمك وQR جاهز للتحميل. اطبعه مرة، وعدّل المنيو براحتك.', 'Your own restaurant link and a downloadable QR. Print it once, update your menu whenever you like.') },
+    { title: text('حط المنيو على الترابيزة', 'Bring your menu to the table'), body: text('اطبع الـQR، أو اختار حامل الأكريليك اللي بيجمع QR وNFC. زبونك يعمل سكان أو يقرّب موبايله ويفتح المنيو.', 'Print your QR, or choose an acrylic stand with QR and NFC. Guests can scan the code or tap their phone to open your menu.') },
     { title: text('واستقبل زباينك بالهنا', 'Let good hospitality happen'), body: text('زبونك يعمل سكان، يتصفح المنيو، ويطلب حسب الباقة اللي اخترتها.', 'Your customer scans, explores, and orders with the features included in your plan.') },
   ];
   return <section id="how-it-works" className="how-section section-space" aria-labelledby="how-title"><div className="page-container">

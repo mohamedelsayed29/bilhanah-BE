@@ -1,21 +1,24 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { ArrowLeftIcon, ChatCircleDotsIcon, EnvelopeSimpleIcon, ForkKnifeIcon, PaperPlaneTiltIcon, QuestionIcon } from '@phosphor-icons/react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { useSiteActions } from '../../../app/SiteLayout';
 import { CONTACT_EMAIL, CONTACT_WHATSAPP } from '../../../lib/config';
 import { usePageTitle, useLanguage } from '../../../lib/language';
 import { PageHero } from '../components/PageHero';
 
-type Topic = 'subscription' | 'support' | 'partnership' | 'other';
+type Topic = 'subscription' | 'nfc' | 'support' | 'partnership' | 'other';
 
 export function ContactPage() {
   const { text } = useLanguage();
+  const [params] = useSearchParams();
+  const standInquiry = params.get('topic') === 'nfc';
   const { openDemo } = useSiteActions();
   const [opened, setOpened] = useState(false);
   usePageTitle('تواصل معانا | بالهنا', 'Contact | Bilhanah');
   const topics: { id: Topic; label: string }[] = [
     { id: 'subscription', label: text('الاشتراك والباقات', 'Plans and subscriptions') },
+    { id: 'nfc', label: text('حوامل الأكريليك QR وNFC', 'QR & NFC acrylic stands') },
     { id: 'support', label: text('مساعدة في الحساب', 'Help with my account') },
     { id: 'partnership', label: text('شراكة أو تعاون', 'Partnership') },
     { id: 'other', label: text('حاجة تانية', 'Something else') },
@@ -79,8 +82,8 @@ export function ContactPage() {
           <label className="contact-field"><span>{text('اسمك', 'Your name')}</span><input name="name" autoComplete="name" required /></label>
           <label className="contact-field"><span>{text('اسم المطعم', 'Restaurant name')} <small>{text('(اختياري)', '(optional)')}</small></span><input name="restaurant" autoComplete="organization" /></label>
           <label className="contact-field"><span>{text('رقم التليفون', 'Phone number')} <small>{text('(اختياري)', '(optional)')}</small></span><input name="phone" type="tel" autoComplete="tel" dir="ltr" /></label>
-          <label className="contact-field"><span>{text('الموضوع', 'Topic')}</span><select name="topic" defaultValue="subscription">{topics.map(topic => <option key={topic.id} value={topic.id}>{topic.label}</option>)}</select></label>
-          <label className="contact-field contact-field-wide"><span>{text('رسالتك', 'Your message')}</span><textarea name="message" rows={5} required /></label>
+          <label className="contact-field"><span>{text('الموضوع', 'Topic')}</span><select name="topic" defaultValue={standInquiry ? 'nfc' : 'subscription'}>{topics.map(topic => <option key={topic.id} value={topic.id}>{topic.label}</option>)}</select></label>
+          <label className="contact-field contact-field-wide"><span>{text('رسالتك', 'Your message')}</span><textarea name="message" rows={5} required defaultValue={standInquiry ? text('حابب أعرف تفاصيل حوامل الأكريليك اللي بتجمع QR وNFC، وإزاي أطلبها لمطعمي.', 'I’d like to know more about your QR & NFC acrylic stands and how to order them for my restaurant.') : ''} /></label>
         </div>
         <div className="contact-submit">
           <button type="submit" className="button button-teal">{text('جهّز الرسالة', 'Prepare message')}<PaperPlaneTiltIcon size={18} /></button>

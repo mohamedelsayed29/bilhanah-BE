@@ -1,5 +1,13 @@
 # Landing Page Verification
 
+## Stand shop frontend — 2026-10-21
+
+The lazy-loaded `/shop` route has three shapes, four print designs and a user-confirmed EGP 350 unit price. Four shop tests pass: multi-design bag/edit/quantity/checkout/summary export; safe links, local logo and draft handling, and QR export; bilingual responsive and AA checks; and maximum-copy/logo/review-stars/table-number combinations inside all three previews at 320px. The two affected homepage layout and accessibility checks also pass. Shop layouts cover 1440, 1024, 768, 390 and 320px in both languages.
+
+The full journey asserts no write requests or payment collection and no checkout phone number in local storage. Contact details stay in memory until a local summary download. Shipping is excluded from product subtotals. TypeScript/Vite build and whitespace checks pass. The existing main-bundle warning remains; shop assets are split into a separate chunk. The mechanical detector reported no findings for new shop UI.
+
+Proof: `.impeccable/review/stand-shop/viewport-ar-1440.png`, `design-ar-390.png`, `design-forest-en.png`, `checkout-ar.png`, and `complete-ar.png`.
+
 ## Scope
 
 Public React landing page and its illustrative menu. No live account creation, backend, payment collection, or restaurant order submission is claimed.
@@ -78,3 +86,42 @@ The prior green CTA band now uses a generated food-truck campaign image with ext
 - Scoped mechanical detector: no findings. Public image provenance: 11 rasters, none missing.
 - Fresh independent closing-section review returned ship with no material fixes. It confirmed visibility of the truck, QR, foreground alert and static vibration marks, readable copy/CTA and mobile crops.
 - Static campaign imagery illustrates the notification; actual vibration still depends on device/browser support as described elsewhere on the page.
+
+## Interactive stand viewer — 2026-10-21
+
+- Replaced the shop's product-photo mode with an on-demand, lazy-loaded Three.js 360° viewer. Classic, Arch and Tilt have modeled depth, rounded acrylic edges, a base, and distinct front/back surfaces. The selected print, logo, brand, destination QR and table numbering update locally.
+- Production TypeScript/Vite build passed. Six focused browser tests passed, covering the existing frontend purchase flow, draft/logo/QR export, all three model shapes, mouse drag, a complete 360° turn, zoom direction, keyboard/reset controls, live design changes, remounting and no-WebGL photo fallback/retry.
+- Arabic/English shop layout checks cover 320–1440px. 3D controls were captured at desktop, 390px and 320px; axe AA checks passed for the gallery. Touch gestures were implemented but physical touchscreen hardware was not tested.
+- Idle/offscreen/hidden rendering is suspended; reduced motion disables orbit damping. The viewer bundle loads only when its tab is selected (about 154 KB gzip). Build retains a chunk-size advisory for this dependency and the existing main bundle.
+- Scoped mechanical detector returned no findings. Current proof captures are in `.impeccable/review/stand-3d/`.
+- Models are illustrative procedural previews, not production CAD specifications. Checkout remains frontend-only at EGP 350 per stand.
+
+
+## Product image as the default shop preview — 2026-10-21
+
+- The gallery now opens with an illustrative product image instead of the flat print mockup. Classic, Arch and Tilt display their corresponding local image with `object-fit: contain`, preserving the full acrylic body and base. Live print customization and 360° interaction remain separate, explicitly labeled views.
+- Production build and seven shop/3D browser tests passed. Coverage includes default selection, all three image sources, local image loading, switching views without losing customization, 320/390/1440px layouts in Arabic/English, and gallery WCAG AA checks. The scoped detector returned no findings.
+- Existing generated product imagery is used; no claim of photography of the user’s manufactured units is made.
+
+
+## Simplified shop and optional NFC — 2026-10-21
+
+- Removed the flat live-design mode. Retained product imagery and the interactive 360° model, with print review linked from the personalization section. Product imagery remains illustrative.
+- Reorganized the form into stand/connectivity, destination, and brand/print; compacted the header, increased input/label sizes, clarified selected states, and added shared itemized pricing for quantity, NFC and product subtotal. Cart, checkout and completion retain the option per design.
+- Confirmed pricing: QR-only EGP 350, NFC surcharge EGP 100 per stand (EGP 450 with NFC). QR-only defaults, saved drafts, mixed carts, edits, quantity changes and JSON v2 export all use the selected option. The scan-only 3D artwork omits NFC waves and tap instructions. Shipping remains excluded; checkout remains a frontend preview.
+- Production build passed. Ten focused browser tests passed, including a mixed order totaling EGP 1,600 with two QR-only and two NFC stands, NFC removal from an edited design, draft reload, no write requests, local logo/QR export, 360° controls/fallback and landing entry points.
+- Arabic and English layouts fit 320, 390, 768, 1024, 1280 and 1440px. Axe AA checks passed. Current design proof: `.impeccable/review/stand-shop/refined-viewport-*` and `refined-*`, plus mixed checkout/completion captures. The scoped mechanical detector reported no findings.
+- Independent finish review: ship, no material fixes. Post-build documentation comparison checked the surface contract, final shop CSS, global palette/type rules, catalog pricing, JSON v2 export, optional-NFC landing copy and README against the existing root `PRODUCT.md` and `DESIGN.md`. This extension preserves the incumbent visual system; no global token or sidecar update was needed. Shop-specific refinements and existing warnings are not promoted to global design rules.
+
+
+## Custom print shades — 2026-10-21
+
+- Added quick swatches, native color pickers and validated three/six-digit HEX input for the background and text. Choosing a background selects readable text; manual text changes show a contrast correction action when needed. A local sample shows both colors and preset/reset behavior remains explicit.
+- Custom shades update the existing 3D artwork, survive draft reload and cart editing, appear in order summaries, and export as custom plus resolved print colors. QR remains dark on white. NFC prices remain 350/450 EGP. Old drafts without custom colors retain their preset.
+- Nine focused shop/color/3D browser checks passed, including exported custom colors in a mixed NFC cart; the final contrast regression separately verifies middle shades. Arabic/English desktop and 390/320px palette captures are under `.impeccable/review/stand-colors/`. Scoped detector and palette axe AA checks passed.
+
+
+## Plus-button color wheel dialog — 2026-10-21
+
+- Moved custom colors from the inline panel into a native modal dialog opened by a plus card beside the four Print style presets. The dialog includes a large hue/saturation wheel, light/dark slider, background/text selection, HEX/native fields, color sample and preset reset. Apply commits; Cancel/Escape/backdrop leave the previous print colors untouched. Native dialog focus containment and explicit focus restoration are preserved; page scroll is locked only while open.
+- Wheel pointer and keyboard controls, brightness extremes, HEX validation, apply/cancel/Escape, draft restore, 3D revision, cart edits and order export passed browser verification. Eight related shop/3D checks passed; the final focused wheel test also passed. Arabic/English captures at 1440/390/320px are in `.impeccable/review/stand-colors/wheel-*`. Modal axe AA and scoped detector checks passed.

@@ -1,5 +1,20 @@
 # Visual Assets
 
+## Stand shop shape photographs
+
+- `public/media/nfc-arch-v1.jpg` (880×1100): arch silhouette, selected original `/Users/test/.codex/generated_images/01a15a8a-cb86-77a3-aba4-5f0cdfff00cd/exec-f5eb8def-7cb9-4ef6-a517-c26cc75644a9.png`.
+- `public/media/nfc-tilt-v1.jpg` (880×1100): leaning L-shaped stand, selected original `/Users/test/.codex/generated_images/01a15a8a-cb86-77a3-aba4-5f0cdfff00cd/exec-434cda89-4a45-408c-895c-d87601b35a27.png`.
+- Generated using built-in ImageGen, referencing the existing classic acrylic product photograph for brand/material consistency. Final prompts are `.impeccable/prompts/stand-shop/arch.txt` and `tilt.txt`. JPEGs were resized/converted using sips without cropping.
+- Catalog photos are illustrative and labeled accordingly. The separate live design preview is CSS geometry with the existing Phosphor icon system and a real locally generated QR. It does not raster-edit the catalog images. The live QR and downloaded SVG encode the shopper’s selected valid web URL.
+
+## QR and NFC acrylic table stands
+
+- `public/media/nfc-acrylic-table-v1.jpg` (1536×1024, about 319 KB): illustrative product photograph of a clear acrylic QR/NFC stand on a restaurant table beside a pasta dish.
+- `public/media/nfc-acrylic-detail-v1.jpg` (880×1100, about 151 KB): matching product detail on a warm ivory studio background.
+- Generated with the built-in `image_gen` tool using the supplied Bilhanah logo as an identity reference. Exact prompts: `.impeccable/prompts/nfc-stands/table.txt`, `table-qr-correction.txt`, and `detail.txt`. JPEG conversions use sips; images are not cropped in the shipping files.
+- Original selected PNGs: `/Users/test/.codex/generated_images/01a15a8a-cb86-77a3-aba4-5f0cdfff00cd/exec-3f538f7e-68df-4ea9-bdc6-a1dc202d8c08.png` and `/Users/test/.codex/generated_images/01a15a8a-cb86-77a3-aba4-5f0cdfff00cd/exec-e721c7d9-8db1-4ffa-b7e8-129ffa7d9b2b.png`.
+- The user confirmed they offer acrylic stands with a QR code and an embedded NFC chip. Images are labeled illustrative concepts, not actual product photography. Pictured QR patterns are illustrative and are not advertised as functional demo links. No dimensions, prices, lead times, customization options or plan inclusion are claimed.
+
 The current hero is a 14.08-second edit of **real filmed stock footage**, not animated photographs or generated video. It shows natural hand and phone motion in three chapters. It is silent H.264 at 1280 × 720, 25 fps, approximately 1.48 MB. Short crossfades join the filmed shots; there are no still-image loops or synthetic camera pans.
 
 ## Current hero video: sources and license
@@ -79,3 +94,7 @@ The layout reference was supplied by the user as `/Users/test/Downloads/Bilhanah
 - Generated using the built-in image_gen tool. Exact prompt: `.impeccable/prompts/food-truck-order-ready.txt` at the project root; also embedded in the shipping JPEG’s COM metadata.
 - User requested a food truck with an exterior QR sign, customers sitting at outdoor tables, and phones vibrating to indicate an order is ready. The image depicts this with an Arabic order-ready notification, checkmarks and restrained vibration marks. It is illustrative campaign imagery, not an actual customer photograph or proof of device behavior. The pictured QR sign is illustrative; the site’s existing sample-menu QR remains the functional demo.
 - On desktop the photograph fills the former green closing band, with existing page copy and CTA on its quiet right side. Mobile shows the scene above the existing text, preserving the truck QR and foreground phone.
+
+## Procedural stand models
+
+The shop's interactive 360° models are generated in `src/features/stand-shop/stand-scene.ts` using Three.js geometry and acrylic materials. Classic, Arch and Tilt do not depend on an external model file or remote model service. Front/back canvas textures are drawn locally in `stand-artwork.ts` using the selected design, local logo and functional QR. Existing shape photographs remain thumbnails and the fallback for browsers without WebGL. Geometry and dimensions are illustrative; no manufacturing accuracy is claimed.
