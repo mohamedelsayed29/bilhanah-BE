@@ -1,8 +1,18 @@
-import { ForbiddenException, Injectable, Logger, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   AUTH_ERROR_CODES,
+  type AuthSession,
   type AuthUser,
+  type changePasswordSchema,
+  COMMON_ERROR_CODES,
   type loginSchema,
   type registerOwnerSchema,
   type SessionResponse,
@@ -281,6 +291,61 @@ export class AuthService {
         data: { revokedAt: now, revokedReason: 'PASSWORD_RESET' },
       });
     });
+  }
+
+  /** Active sessions, most recently used first. */
+  async listSessions(userId: string, currentSessionId: string): Promise<AuthSession[]> {
+    const sessions = await this.prisma.session.findMany({
+      where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: [{ lastUsedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+    });
+    return sessions.map((session) => ({
+      id: session.id,
+      current: session.id === currentSessionId,
+      createdAt: session.createdAt.toISOString(),
+      lastUsedAt: session.lastUsedAt?.toISOString() ?? null,
+      expiresAt: session.expiresAt.toISOString(),
+      userAgent: session.userAgent,
+      ipAddress: session.ipAddress,
+    }));
+  }
+
+  /** Signs out one of the caller's own sessions; other users' IDs look unknown. */
+  async revokeSession(userId: string, sessionId: string): Promise<void> {
+    const revoked = await this.prisma.session.updateMany({
+      where: { id: sessionId, userId, revokedAt: null },
+      data: { revokedAt: new Date(), revokedReason: 'REVOKED_BY_USER' },
+    });
+    if (revoked.count === 0) {
+      throw new NotFoundException({ code: COMMON_ERROR_CODES.NOT_FOUND, message: 'Session not found.' });
+    }
+  }
+
+  /** Requires the current password and signs out every other session. */
+  async changePassword(
+    auth: { userId: string; sessionId: string },
+    input: z.output<typeof changePasswordSchema>,
+  ): Promise<void> {
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
+    if (!(await this.passwords.verify(user.passwordHash ?? undefined, input.currentPassword))) {
+      // 400 rather than 401, so clients do not treat it as an expired session.
+      throw new BadRequestException({
+        code: AUTH_ERROR_CODES.INVALID_CREDENTIALS,
+        message: 'The current password is incorrect.',
+      });
+    }
+
+    const now = new Date();
+    const passwordHash = await this.passwords.hash(input.newPassword);
+    await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id: user.id }, data: { passwordHash, passwordChangedAt: now } }),
+      this.prisma.session.updateMany({
+        where: { userId: user.id, revokedAt: null, id: { not: auth.sessionId } },
+        data: { revokedAt: now, revokedReason: 'PASSWORD_CHANGE' },
+      }),
+      // Outstanding reset links would otherwise still set a password.
+      this.prisma.passwordResetToken.deleteMany({ where: { userId: user.id, usedAt: null } }),
+    ]);
   }
 
   async me(userId: string): Promise<AuthUser> {

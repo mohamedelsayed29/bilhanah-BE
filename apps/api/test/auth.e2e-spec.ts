@@ -310,3 +310,85 @@ describe('password reset', () => {
     await http().post('/v1/auth/reset-password').send({ token: newer, password: NEW_PASSWORD }).expect(204);
   });
 });
+
+describe('account security', () => {
+  const OTHER = 'other@koshary.test';
+
+  beforeEach(async () => {
+    await registerAndVerify();
+  });
+
+  const bearer = (response: request.Response) => `Bearer ${response.body.accessToken}`;
+
+  it('lists active sessions and marks the current one', async () => {
+    await login().expect(200);
+    const current = await login().expect(200);
+
+    const response = await http().get('/v1/auth/sessions').set('Authorization', bearer(current)).expect(200);
+    expect(response.body).toHaveLength(2);
+    expect(response.body.filter((session: { current: boolean }) => session.current)).toHaveLength(1);
+    expect(response.body[0]).not.toHaveProperty('tokenHash');
+  });
+
+  it('signs out another device', async () => {
+    const phone = await login().expect(200);
+    const laptop = await login().expect(200);
+    const sessions = await http().get('/v1/auth/sessions').set('Authorization', bearer(laptop)).expect(200);
+    const phoneSession = sessions.body.find((session: { current: boolean }) => !session.current);
+
+    await http().delete(`/v1/auth/sessions/${phoneSession.id}`).set('Authorization', bearer(laptop)).expect(204);
+
+    await http().get('/v1/auth/me').set('Authorization', bearer(phone)).expect(401);
+    await http().get('/v1/auth/me').set('Authorization', bearer(laptop)).expect(200);
+  });
+
+  it("cannot sign out another account's session", async () => {
+    const mine = await login().expect(200);
+    await registerAndVerify(OTHER);
+    const theirs = await login(OTHER).expect(200);
+    const [theirSession] = (await http().get('/v1/auth/sessions').set('Authorization', bearer(theirs))).body;
+
+    const response = await http()
+      .delete(`/v1/auth/sessions/${theirSession.id}`)
+      .set('Authorization', bearer(mine))
+      .expect(404);
+    expect(response.body.error.code).toBe('NOT_FOUND');
+    await http().get('/v1/auth/me').set('Authorization', bearer(theirs)).expect(200);
+  });
+
+  it('changes the password and signs out other sessions only', async () => {
+    const other = await login().expect(200);
+    const current = await login().expect(200);
+    await http().post('/v1/auth/forgot-password').send({ email: EMAIL }).expect(202);
+    const pendingReset = t.mailer.tokenFor(EMAIL);
+
+    await http()
+      .post('/v1/auth/change-password')
+      .set('Authorization', bearer(current))
+      .send({ currentPassword: PASSWORD, newPassword: NEW_PASSWORD })
+      .expect(204);
+
+    await http().get('/v1/auth/me').set('Authorization', bearer(current)).expect(200);
+    await http().get('/v1/auth/me').set('Authorization', bearer(other)).expect(401);
+    await login().expect(401);
+    await login(EMAIL, NEW_PASSWORD).expect(200);
+    // A reset link sent before the change no longer works.
+    await http().post('/v1/auth/reset-password').send({ token: pendingReset, password: 'another-password-1' }).expect(400);
+  });
+
+  it('requires the current password', async () => {
+    const current = await login().expect(200);
+    const response = await http()
+      .post('/v1/auth/change-password')
+      .set('Authorization', bearer(current))
+      .send({ currentPassword: 'wrong-password', newPassword: NEW_PASSWORD })
+      .expect(400);
+    expect(response.body.error.code).toBe('INVALID_CREDENTIALS');
+    await login().expect(200);
+  });
+
+  it('requires a signed-in caller', async () => {
+    await http().get('/v1/auth/sessions').expect(401);
+    await http().post('/v1/auth/change-password').send({ currentPassword: PASSWORD, newPassword: NEW_PASSWORD }).expect(401);
+  });
+});

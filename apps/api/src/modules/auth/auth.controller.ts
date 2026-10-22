@@ -1,11 +1,27 @@
-import { Body, Controller, Get, Header, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Header,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  type AuthSession,
   type AuthUser,
+  changePasswordSchema,
   emailOnlySchema,
   loginSchema,
   registerOwnerSchema,
   resetPasswordSchema,
+  sessionIdParamSchema,
   type SessionResponse,
   verifyEmailSchema,
   type VerifyEmailResponse,
@@ -125,6 +141,34 @@ export class AuthController {
   @UseGuards(AccessTokenGuard)
   me(@CurrentAuth() auth: AuthContext): Promise<AuthUser> {
     return this.auth.me(auth.userId);
+  }
+
+  @Get('sessions')
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(AccessTokenGuard)
+  sessions(@CurrentAuth() auth: AuthContext): Promise<AuthSession[]> {
+    return this.auth.listSessions(auth.userId, auth.sessionId);
+  }
+
+  @Delete('sessions/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(AccessTokenGuard)
+  async revokeSession(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', new ZodValidationPipe(sessionIdParamSchema)) id: string,
+  ): Promise<void> {
+    await this.auth.revokeSession(auth.userId, id);
+  }
+
+  @Post('change-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(AccessTokenGuard)
+  @RateLimit({ name: 'change-password:ip', limit: 10, windowSeconds: 15 * 60, by: 'ip' })
+  async changePassword(
+    @CurrentAuth() auth: AuthContext,
+    @Body(new ZodValidationPipe(changePasswordSchema)) body: z.output<typeof changePasswordSchema>,
+  ): Promise<void> {
+    await this.auth.changePassword(auth, body);
   }
 
   private withRefreshCookie(response: Response, issued: IssuedSession): SessionResponse {

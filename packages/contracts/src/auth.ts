@@ -39,6 +39,13 @@ export const verifyEmailSchema = z.object({ token: linkTokenSchema });
 
 export const resetPasswordSchema = z.object({ token: linkTokenSchema, password: passwordSchema });
 
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(128),
+  newPassword: passwordSchema,
+});
+
+export const sessionIdParamSchema = z.uuid();
+
 export type AuthUser = {
   id: string;
   email: string;
@@ -46,6 +53,18 @@ export type AuthUser = {
   preferredLanguage: Language;
   role: UserRole;
   emailVerified: boolean;
+};
+
+/** A signed-in device, as listed on the account page. */
+export type AuthSession = {
+  id: string;
+  /** True for the session making the request. */
+  current: boolean;
+  createdAt: string;
+  lastUsedAt: string | null;
+  expiresAt: string;
+  userAgent: string | null;
+  ipAddress: string | null;
 };
 
 export type VerifyEmailResponse = {

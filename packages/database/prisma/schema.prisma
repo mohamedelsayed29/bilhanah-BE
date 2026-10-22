@@ -34,6 +34,9 @@ enum SessionRevokedReason {
   LOGOUT
   REFRESH_TOKEN_REUSE
   PASSWORD_RESET
+  PASSWORD_CHANGE
+  /// Ended from the account's session list.
+  REVOKED_BY_USER
 
   @@map("session_revoked_reason")
 }
