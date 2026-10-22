@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
+import { jsonBody } from './common/http/json-body.js';
 import type { Env } from './config/env.schema.js';
 
 /** HTTP configuration shared by the server bootstrap and e2e tests. */
@@ -12,6 +13,8 @@ export function configureApp(app: NestExpressApplication): void {
   app.set('trust proxy', config.get('TRUST_PROXY', { infer: true }));
   app.use(helmet());
   app.use(cookieParser());
+  // Runs before Nest's parser (registered at init), so body errors get standard codes.
+  app.use(jsonBody());
   const dashboardOrigins = config.get('CORS_ORIGINS', { infer: true });
   app.enableCors((request: { url?: string }, callback) => {
     // Public restaurant data is read from every restaurant subdomain and never uses cookies.
