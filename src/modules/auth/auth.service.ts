@@ -6,6 +6,7 @@ import {
   type loginSchema,
   type registerOwnerSchema,
   type SessionResponse,
+  type VerifyEmailResponse,
 } from '@bilhanah/contracts';
 import type { User } from '@bilhanah/database';
 import type { z } from 'zod';
@@ -20,6 +21,7 @@ import { formatRefreshToken, generateToken, hashesEqual, hashToken, parseRefresh
 
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type ClientMeta = { ipAddress?: string; userAgent?: string };
 
@@ -67,6 +69,7 @@ export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly dashboardUrl: string;
   private readonly refreshTtlMs: number;
+  private readonly sessionMaxMs: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -76,7 +79,8 @@ export class AuthService {
     config: ConfigService<Env, true>,
   ) {
     this.dashboardUrl = config.get('DASHBOARD_URL', { infer: true }).replace(/\/$/, '');
-    this.refreshTtlMs = config.get('REFRESH_TOKEN_TTL_DAYS', { infer: true }) * 24 * 60 * 60 * 1000;
+    this.refreshTtlMs = config.get('REFRESH_TOKEN_TTL_DAYS', { infer: true }) * DAY_MS;
+    this.sessionMaxMs = config.get('SESSION_MAX_DAYS', { infer: true }) * DAY_MS;
   }
 
   async register(input: z.output<typeof registerOwnerSchema>): Promise<void> {
@@ -90,9 +94,18 @@ export class AuthService {
           existingAccountEmail(existing.email, existing.fullName, existing.preferredLanguage, this.dashboardUrl),
           'existing-account',
         );
-      } else {
-        await this.sendVerification(existing);
+        return;
       }
+      // Either registration may have come from someone other than the inbox
+      // owner, so keeping either password would let them sign in once the
+      // owner confirms. Keep neither; verifyEmail then sends a link to set one.
+      if (existing.passwordHash && !(await this.passwords.verify(existing.passwordHash, input.password))) {
+        await this.prisma.user.updateMany({
+          where: { id: existing.id, emailVerifiedAt: null },
+          data: { passwordHash: null },
+        });
+      }
+      await this.sendVerification(existing);
       return;
     }
 
@@ -120,12 +133,12 @@ export class AuthService {
     }
   }
 
-  async verifyEmail(token: string): Promise<void> {
+  async verifyEmail(token: string): Promise<VerifyEmailResponse> {
     const now = new Date();
     const record = await this.prisma.emailVerificationToken.findUnique({ where: { tokenHash: hashToken(token) } });
     if (!record || record.usedAt || record.expiresAt <= now) throw invalidToken();
 
-    await this.prisma.$transaction(async (tx) => {
+    const user = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.emailVerificationToken.updateMany({
         where: { id: record.id, usedAt: null },
         data: { usedAt: now },
@@ -135,12 +148,17 @@ export class AuthService {
         where: { id: record.userId, emailVerifiedAt: null },
         data: { emailVerifiedAt: now },
       });
+      return tx.user.findUniqueOrThrow({ where: { id: record.userId } });
     });
+
+    const passwordSetupRequired = user.passwordHash === null;
+    if (passwordSetupRequired) await this.sendPasswordReset(user);
+    return { passwordSetupRequired };
   }
 
   async login(input: z.output<typeof loginSchema>, meta: ClientMeta): Promise<IssuedSession> {
     const user = await this.prisma.user.findUnique({ where: { email: input.email } });
-    const passwordValid = await this.passwords.verify(user?.passwordHash, input.password);
+    const passwordValid = await this.passwords.verify(user?.passwordHash ?? undefined, input.password);
     // Platform administrators will sign in through a separate MFA flow.
     if (!user || !passwordValid || user.role !== 'OWNER') throw invalidCredentials();
     if (user.status !== 'ACTIVE') {
@@ -157,16 +175,18 @@ export class AuthService {
     }
 
     const secret = generateToken();
+    const now = new Date();
     const session = await this.prisma.session.create({
       data: {
         userId: user.id,
         tokenHash: hashToken(secret),
-        expiresAt: new Date(Date.now() + this.refreshTtlMs),
+        createdAt: now,
+        expiresAt: this.nextExpiry(now, now),
         userAgent: meta.userAgent?.slice(0, 512),
         ipAddress: meta.ipAddress?.slice(0, 64),
       },
     });
-    return this.issue(user, session.id, secret);
+    return this.issue(user, session.id, secret, session.expiresAt);
   }
 
   /**
@@ -183,7 +203,13 @@ export class AuthService {
       where: { id: parsed.sessionId },
       include: { user: true },
     });
-    if (!session || session.revokedAt || session.expiresAt <= now || session.user.status !== 'ACTIVE') {
+    if (
+      !session ||
+      session.revokedAt ||
+      session.expiresAt <= now ||
+      this.nextExpiry(session.createdAt, now) <= now ||
+      session.user.status !== 'ACTIVE'
+    ) {
       throw sessionInvalid();
     }
 
@@ -197,18 +223,19 @@ export class AuthService {
     }
 
     const nextSecret = generateToken();
+    const nextExpiresAt = this.nextExpiry(session.createdAt, now);
     const rotated = await this.prisma.session.updateMany({
       where: { id: session.id, tokenHash: session.tokenHash, revokedAt: null },
       data: {
         tokenHash: hashToken(nextSecret),
         lastUsedAt: now,
-        expiresAt: new Date(now.getTime() + this.refreshTtlMs),
+        expiresAt: nextExpiresAt,
       },
     });
     // Another request rotated this token between our read and write.
     if (rotated.count !== 1) throw sessionInvalid();
 
-    return this.issue(session.user, session.id, nextSecret);
+    return this.issue(session.user, session.id, nextSecret, nextExpiresAt);
   }
 
   /** Ends the session identified by the cookie. Silently ignores unknown or stale tokens. */
@@ -226,18 +253,7 @@ export class AuthService {
   async forgotPassword(email: string): Promise<void> {
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user || user.status !== 'ACTIVE' || user.role !== 'OWNER') return;
-
-    const token = generateToken();
-    await this.prisma.$transaction([
-      this.prisma.passwordResetToken.deleteMany({ where: { userId: user.id, usedAt: null } }),
-      this.prisma.passwordResetToken.create({
-        data: { userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS) },
-      }),
-    ]);
-    this.mailer.sendInBackground(
-      passwordResetEmail(user.email, user.fullName, user.preferredLanguage, this.dashboardUrl, token),
-      'password-reset',
-    );
+    await this.sendPasswordReset(user);
   }
 
   /** Sets a new password and signs the account out everywhere. */
@@ -271,7 +287,12 @@ export class AuthService {
     return toAuthUser(await this.prisma.user.findUniqueOrThrow({ where: { id: userId } }));
   }
 
-  private async issue(user: User, sessionId: string, secret: string): Promise<IssuedSession> {
+  /** Each use extends a session, but never past SESSION_MAX_DAYS from sign-in. */
+  private nextExpiry(createdAt: Date, now: Date): Date {
+    return new Date(Math.min(now.getTime() + this.refreshTtlMs, createdAt.getTime() + this.sessionMaxMs));
+  }
+
+  private async issue(user: User, sessionId: string, secret: string, expiresAt: Date): Promise<IssuedSession> {
     return {
       response: {
         accessToken: await this.accessTokens.sign(user.id, sessionId, user.role),
@@ -279,8 +300,23 @@ export class AuthService {
         user: toAuthUser(user),
       },
       refreshToken: formatRefreshToken(sessionId, secret),
-      refreshTokenMaxAgeMs: this.refreshTtlMs,
+      refreshTokenMaxAgeMs: Math.max(0, expiresAt.getTime() - Date.now()),
     };
+  }
+
+  /** Only the newest reset link works. */
+  private async sendPasswordReset(user: User): Promise<void> {
+    const token = generateToken();
+    await this.prisma.$transaction([
+      this.prisma.passwordResetToken.deleteMany({ where: { userId: user.id, usedAt: null } }),
+      this.prisma.passwordResetToken.create({
+        data: { userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS) },
+      }),
+    ]);
+    this.mailer.sendInBackground(
+      passwordResetEmail(user.email, user.fullName, user.preferredLanguage, this.dashboardUrl, token),
+      'password-reset',
+    );
   }
 
   private async sendVerification(user: User): Promise<void> {
