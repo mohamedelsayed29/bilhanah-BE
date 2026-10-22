@@ -8,8 +8,8 @@ import type { Env } from './config/env.schema.js';
 export function configureApp(app: NestExpressApplication): void {
   const config = app.get<ConfigService<Env, true>>(ConfigService);
 
-  // Requests arrive through Nginx on the same host.
-  app.set('trust proxy', 'loopback');
+  // Which hops may set X-Forwarded-For; the client IP drives rate limiting.
+  app.set('trust proxy', config.get('TRUST_PROXY', { infer: true }));
   app.use(helmet());
   app.use(cookieParser());
   const dashboardOrigins = config.get('CORS_ORIGINS', { infer: true });

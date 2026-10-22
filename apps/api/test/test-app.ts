@@ -78,7 +78,7 @@ export async function signUpOwner(t: TestApp, email: string, password = 'correct
   await request(t.app.getHttpServer())
     .post('/v1/auth/verify-email')
     .send({ token: t.mailer.tokenFor(email) })
-    .expect(204);
+    .expect(200);
   const response = await request(t.app.getHttpServer())
     .post('/v1/auth/login')
     .set('Origin', DASHBOARD_ORIGIN)

@@ -48,6 +48,14 @@ export type AuthUser = {
   emailVerified: boolean;
 };
 
+export type VerifyEmailResponse = {
+  /**
+   * True when the account has no usable password yet (it was registered more
+   * than once before confirmation). A link to set one has been emailed.
+   */
+  passwordSetupRequired: boolean;
+};
+
 export type SessionResponse = {
   accessToken: string;
   /** Seconds. */

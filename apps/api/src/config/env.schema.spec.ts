@@ -41,4 +41,21 @@ describe('validateEnv', () => {
       /DATABASE_URL/,
     );
   });
+
+  it('reads TRUST_PROXY as a hop count or an address list', () => {
+    expect(validateEnv(valid).TRUST_PROXY).toBe('loopback');
+    expect(validateEnv({ ...valid, TRUST_PROXY: '1' }).TRUST_PROXY).toBe(1);
+    expect(validateEnv({ ...valid, TRUST_PROXY: '10.0.0.0/8, loopback' }).TRUST_PROXY).toBe('10.0.0.0/8, loopback');
+  });
+
+  it('refuses to trust every proxy', () => {
+    expect(() => validateEnv({ ...valid, TRUST_PROXY: 'true' })).toThrow(/TRUST_PROXY/);
+  });
+
+  it('keeps the session cap at or above the refresh lifetime', () => {
+    expect(validateEnv(valid).SESSION_MAX_DAYS).toBe(90);
+    expect(() => validateEnv({ ...valid, REFRESH_TOKEN_TTL_DAYS: '30', SESSION_MAX_DAYS: '7' })).toThrow(
+      /SESSION_MAX_DAYS/,
+    );
+  });
 });

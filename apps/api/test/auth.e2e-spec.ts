@@ -19,7 +19,7 @@ const cookiePair = (setCookie: string) => setCookie.split(';')[0]!;
 
 async function registerAndVerify(email = EMAIL, password = PASSWORD) {
   await http().post('/v1/auth/register').send({ email, password, fullName: 'Om Hassan' }).expect(202);
-  await http().post('/v1/auth/verify-email').send({ token: t.mailer.tokenFor(email) }).expect(204);
+  await http().post('/v1/auth/verify-email').send({ token: t.mailer.tokenFor(email) }).expect(200);
 }
 
 function login(email = EMAIL, password = PASSWORD) {
@@ -53,7 +53,8 @@ describe('registration and email verification', () => {
     expect(blocked.body.error.code).toBe('EMAIL_NOT_VERIFIED');
 
     const token = t.mailer.tokenFor(EMAIL);
-    await http().post('/v1/auth/verify-email').send({ token }).expect(204);
+    const verified = await http().post('/v1/auth/verify-email').send({ token }).expect(200);
+    expect(verified.body).toEqual({ passwordSetupRequired: false });
     await login().expect(200);
 
     const reused = await http().post('/v1/auth/verify-email').send({ token }).expect(400);
@@ -74,6 +75,38 @@ describe('registration and email verification', () => {
 
     expect(t.mailer.lastTo(EMAIL)?.subject).toBe('حسابك في بالهنا موجود بالفعل');
     await login(EMAIL, 'attacker-chosen-password').expect(401);
+    await login().expect(200);
+  });
+
+  it('keeps no password when an unconfirmed email is registered twice', async () => {
+    // Someone without access to the inbox registers it first...
+    await http()
+      .post('/v1/auth/register')
+      .send({ email: EMAIL, password: 'attacker-chosen-password', fullName: 'Someone' })
+      .expect(202);
+    // ...then the real owner registers and confirms.
+    await http().post('/v1/auth/register').send({ email: EMAIL, password: PASSWORD, fullName: 'Om Hassan' }).expect(202);
+    const verified = await http()
+      .post('/v1/auth/verify-email')
+      .send({ token: t.mailer.tokenFor(EMAIL) })
+      .expect(200);
+
+    expect(verified.body).toEqual({ passwordSetupRequired: true });
+    await login(EMAIL, 'attacker-chosen-password').expect(401);
+    await login().expect(401);
+
+    // Only the inbox owner can set a password.
+    expect(t.mailer.lastTo(EMAIL)?.text).toContain('http://dashboard.test/reset-password#token=');
+    await http()
+      .post('/v1/auth/reset-password')
+      .send({ token: t.mailer.tokenFor(EMAIL), password: NEW_PASSWORD })
+      .expect(204);
+    await login(EMAIL, NEW_PASSWORD).expect(200);
+  });
+
+  it('keeps the password when an unconfirmed email is registered again with it', async () => {
+    await http().post('/v1/auth/register').send({ email: EMAIL, password: PASSWORD, fullName: 'Om Hassan' }).expect(202);
+    await registerAndVerify();
     await login().expect(200);
   });
 
@@ -193,6 +226,29 @@ describe('sessions', () => {
     // The legitimate holder is signed out too.
     await refresh(current).expect(401);
     await http().get('/v1/auth/me').set('Authorization', `Bearer ${loggedIn.body.accessToken}`).expect(401);
+  });
+
+  it('never extends a session past its absolute lifetime', async () => {
+    const loggedIn = await login().expect(200);
+    const cookie = refreshCookie(loggedIn);
+    const [session] = await t.prisma.session.findMany();
+
+    // Signed in 89 days ago: the next refresh may only reach day 90.
+    const createdAt = new Date(Date.now() - 89 * 24 * 60 * 60 * 1000);
+    await t.prisma.session.update({ where: { id: session!.id }, data: { createdAt } });
+    const refreshed = await refresh(cookie).expect(200);
+    const capped = await t.prisma.session.findUniqueOrThrow({ where: { id: session!.id } });
+    expect(capped.expiresAt.getTime()).toBe(createdAt.getTime() + 90 * 24 * 60 * 60 * 1000);
+    const maxAge = Number(/Max-Age=(\d+)/.exec(refreshCookie(refreshed))?.[1]);
+    expect(maxAge).toBeGreaterThan(86_000);
+    expect(maxAge).toBeLessThanOrEqual(86_400);
+
+    // Past day 90 the session is over, even though its sliding expiry is not.
+    await t.prisma.session.update({
+      where: { id: session!.id },
+      data: { createdAt: new Date(Date.now() - 91 * 24 * 60 * 60 * 1000) },
+    });
+    await refresh(refreshCookie(refreshed)).expect(401);
   });
 
   it('logout ends the session and clears the cookie', async () => {

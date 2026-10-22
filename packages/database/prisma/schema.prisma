@@ -63,7 +63,8 @@ enum EntitlementKind {
 model User {
   id                String     @id @default(uuid()) @db.Uuid
   email             String     @unique
-  passwordHash      String     @map("password_hash")
+  /// Null when nobody may sign in with a password until the inbox owner sets one (see AuthService.register).
+  passwordHash      String?    @map("password_hash")
   fullName          String     @map("full_name")
   preferredLanguage Language   @default(ar) @map("preferred_language")
   role              UserRole   @default(OWNER)

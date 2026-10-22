@@ -8,6 +8,7 @@ import {
   resetPasswordSchema,
   type SessionResponse,
   verifyEmailSchema,
+  type VerifyEmailResponse,
 } from '@bilhanah/contracts';
 import type { Request, Response } from 'express';
 import type { z } from 'zod';
@@ -55,10 +56,12 @@ export class AuthController {
   }
 
   @Post('verify-email')
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   @RateLimit({ name: 'verify:ip', limit: 20, windowSeconds: 15 * 60, by: 'ip' })
-  async verifyEmail(@Body(new ZodValidationPipe(verifyEmailSchema)) body: z.output<typeof verifyEmailSchema>) {
-    await this.auth.verifyEmail(body.token);
+  verifyEmail(
+    @Body(new ZodValidationPipe(verifyEmailSchema)) body: z.output<typeof verifyEmailSchema>,
+  ): Promise<VerifyEmailResponse> {
+    return this.auth.verifyEmail(body.token);
   }
 
   @Post('login')
