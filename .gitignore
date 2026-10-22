@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+packages/database/src/generated/
+coverage/
+test-results/
+playwright-report/
