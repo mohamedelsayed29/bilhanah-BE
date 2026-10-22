@@ -25,9 +25,16 @@ FROM build AS migrate
 WORKDIR /app/packages/database
 CMD ["npx", "prisma", "migrate", "deploy"]
 
-FROM manifests AS prod-deps
-RUN npm ci --ignore-scripts --omit=dev \
-      -w @bilhanah/backend -w @bilhanah/contracts -w @bilhanah/database
+# Only the API's workspaces: npm ci ignores -w filters, so the web manifest is
+# left out to keep its dependencies out. --omit=optional drops the Prisma CLI
+# and TypeScript, which @prisma/client lists as optional peers.
+FROM base AS prod-deps
+COPY package.json package-lock.json ./
+COPY packages/config/package.json packages/config/
+COPY packages/contracts/package.json packages/contracts/
+COPY packages/database/package.json packages/database/
+COPY apps/api/package.json apps/api/
+RUN npm ci --ignore-scripts --omit=dev --omit=optional
 
 FROM base AS runtime
 ENV NODE_ENV=production
