@@ -1,0 +1,67 @@
+.shop-print-style .shop-design-options { grid-template-columns: repeat(4, minmax(0, 1fr)) 60px; }
+.stand-custom-style { display: flex; flex-direction: column; align-items: center; gap: 7px; min-width: 0; }
+.stand-custom-style > span { font-size: 11px; color: #53624f; text-align: center; line-height: 1.8; }
+.stand-add-color { width: 100%; height: 82px; display: grid; place-items: center; border: 1px dashed #a1b099; border-radius: 8px; color: var(--teal); background: #fffdf8; }
+.stand-add-color.selected { border-style: solid; outline: 2px solid var(--teal); outline-offset: 2px; }
+.stand-color-dialog { width: min(620px, calc(100% - 32px)); max-width: none; max-height: calc(100dvh - 32px); padding: 0; margin: auto; border: 0; border-radius: 16px; background: var(--ivory); color: var(--ink); box-shadow: 0 24px 70px -25px #172b2570; overflow: hidden; }
+.stand-color-dialog::backdrop { background: #172b2570; backdrop-filter: blur(3px); }
+.stand-color-dialog-inner { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; max-height: calc(100dvh - 32px); }
+.stand-color-dialog header { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; padding: 22px 24px 15px; }
+.stand-color-dialog h2 { font-size: 22px; font-weight: 750; line-height: 1.6; }
+.stand-color-dialog header p { font-size: 12px; color: #53624f; line-height: 1.8; margin-top: 4px; }
+.stand-color-close { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; color: var(--teal); background: #e9eee2; }
+.stand-color-dialog-body { min-height: 0; padding: 0 24px 18px; overflow-y: auto; overscroll-behavior: contain; }
+.stand-color-target { display: flex; gap: 8px; margin-bottom: 22px; }
+.stand-color-target button { display: inline-flex; align-items: center; gap: 9px; min-height: 44px; padding: 8px 18px; border: 1px solid #c8d2bf; border-radius: 999px; background: transparent; color: var(--teal); font-size: 13px; }
+.stand-color-target button[aria-pressed='true'] { background: #e8eee1; border-color: var(--teal); }
+.stand-color-target i { width: 17px; height: 17px; border: 1px solid #98a78e; border-radius: 50%; }
+.stand-color-dialog-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 26px; align-items: start; }
+.stand-color-wheel { position: relative; width: 100%; aspect-ratio: 1; border-radius: 50%; cursor: crosshair; touch-action: none; user-select: none; -webkit-user-select: none; }
+.stand-wheel-spectrum { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle closest-side, #fff, #fff0), conic-gradient(from 90deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); pointer-events: none; }
+.stand-wheel-thumb { position: absolute; width: 19px; height: 19px; transform: translate(-50%, -50%); border: 3px solid #fff; border-radius: 50%; box-shadow: 0 2px 4px #172b2570, 0 0 0 1px #172b25; pointer-events: none; }
+.stand-wheel-help { font-size: 10px; color: #53624f; line-height: 1.7; margin-top: 15px; }
+.stand-brightness { display: block; margin-top: 12px; color: var(--ink); font-size: 12px; }
+.stand-brightness > span { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.stand-brightness b { color: #53624f; font-size: 11px; font-weight: 500; }
+.stand-brightness input { width: 100%; height: 18px; border-radius: 999px; margin: 14px 0; cursor: pointer; appearance: none; -webkit-appearance: none; direction: ltr; }
+.stand-brightness input::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 25px; height: 25px; border: 3px solid #fff; border-radius: 50%; background: var(--teal); box-shadow: 0 2px 4px #172b2555; }
+.stand-brightness input::-moz-range-thumb { width: 21px; height: 21px; border: 3px solid #fff; border-radius: 50%; background: var(--teal); }
+.stand-color-dialog-values { display: grid; gap: 16px; }
+.stand-color-field { min-width: 0; }
+.stand-color-field > span { display: block; color: var(--ink); font-size: 12px; font-weight: 650; margin-bottom: 8px; }
+.stand-color-inputs { display: flex; gap: 8px; min-width: 0; }
+.stand-native-color { display: block; appearance: none; -webkit-appearance: none; width: 48px; height: 48px; flex-shrink: 0; border: 1px solid #b9c6b2; background: var(--surface); padding: 4px; border-radius: 8px; cursor: pointer; }
+.stand-native-color::-webkit-color-swatch-wrapper { padding: 0; }
+.stand-native-color::-webkit-color-swatch { border: 0; border-radius: 4px; }
+.stand-native-color::-moz-color-swatch { border: 0; border-radius: 4px; }
+.stand-color-inputs .stand-color-hex { width: 100%; min-width: 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+.stand-color-sample { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 16px; border-radius: 10px; overflow-wrap: anywhere; }
+.stand-color-sample strong { font-size: 17px; }
+.stand-color-sample span { font-size: 11px; }
+.stand-color-contrast { color: #783b25; font-size: 12px; line-height: 1.9; }
+.stand-color-contrast button, .stand-color-reset { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 5px 0; border: 0; background: transparent; color: var(--teal); font-size: 11px; text-decoration: underline; text-underline-offset: 4px; text-align: start; }
+.stand-color-reset { justify-self: start; }
+.stand-color-dialog-note { font-size: 11px; line-height: 1.8; color: #53624f; margin-top: 14px; }
+.stand-color-dialog footer { display: flex; gap: 12px; justify-content: flex-end; padding: 16px 24px; border-top: 1px solid var(--line); }
+.stand-color-dialog footer .button { min-height: 46px; font-size: 13px; padding: 10px 23px; }
+.shop-order-colors { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 7px; color: #53624f; font-size: 11px; }
+.shop-order-colors > i { display: inline-block; width: 18px; height: 18px; border: 1px solid #9dac95; border-radius: 4px; }
+@media (max-width: 760px) {
+  .shop-print-style .shop-design-options { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+  .stand-color-inputs .stand-color-hex { font-size: 16px; }
+  .stand-custom-style > span { font-size: 10px; }
+}
+@media (max-width: 600px) {
+  .stand-color-dialog { width: min(380px, calc(100% - 24px)); max-height: calc(100dvh - 24px); }
+  .stand-color-dialog-inner { max-height: calc(100dvh - 24px); }
+  .stand-color-dialog header { padding: 18px; }
+  .stand-color-dialog h2 { font-size: 19px; }
+  .stand-color-dialog-body { padding: 0 20px 18px; }
+  .stand-color-dialog-layout { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .stand-wheel-controls { width: 100%; max-width: 260px; margin-inline: auto; }
+  .stand-color-target { margin-bottom: 18px; }
+  .stand-color-target button { flex: 1; justify-content: center; }
+  .stand-color-dialog footer { padding: 14px 18px; }
+  .stand-color-dialog footer .button { flex: 1; padding-inline: 12px; }
+  .stand-color-dialog-values { gap: 14px; }
+}
