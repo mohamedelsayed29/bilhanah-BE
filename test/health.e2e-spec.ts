@@ -55,6 +55,29 @@ describe('Health and HTTP conventions (e2e)', () => {
     expect(response.headers['access-control-allow-credentials']).toBeUndefined();
   });
 
+  it('rejects malformed JSON with the standard validation error', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/v1/auth/forgot-password')
+      .set('Content-Type', 'application/json')
+      .send('{"email":')
+      .expect(400);
+    expect(response.body.error).toEqual({
+      code: 'VALIDATION_FAILED',
+      message: 'The request body is not valid JSON.',
+      requestId: expect.any(String),
+    });
+    expect(response.headers['x-request-id']).toBe(response.body.error.requestId);
+  });
+
+  it('rejects oversized bodies with 413', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/v1/auth/forgot-password')
+      .set('Content-Type', 'application/json')
+      .send(JSON.stringify({ email: 'a'.repeat(200_000) }))
+      .expect(413);
+    expect(response.body.error.code).toBe('PAYLOAD_TOO_LARGE');
+  });
+
   it('returns the standard error shape for unknown routes', async () => {
     const response = await request(app.getHttpServer())
       .get('/v1/does-not-exist')

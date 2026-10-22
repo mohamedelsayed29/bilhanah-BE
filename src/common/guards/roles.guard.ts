@@ -1,6 +1,6 @@
 import { type CanActivate, type ExecutionContext, ForbiddenException, Injectable, SetMetadata } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { RESTAURANT_ERROR_CODES, type UserRole } from '@bilhanah/contracts';
+import { COMMON_ERROR_CODES, type UserRole } from '@bilhanah/contracts';
 import type { AuthContext } from '../decorators/current-auth.decorator.js';
 
 const REQUIRED_ROLES = 'requiredRoles';
@@ -21,7 +21,7 @@ export class RolesGuard implements CanActivate {
     const auth = context.switchToHttp().getRequest<{ auth?: AuthContext }>().auth;
     if (auth && roles.includes(auth.role)) return true;
     throw new ForbiddenException({
-      code: RESTAURANT_ERROR_CODES.FORBIDDEN,
+      code: COMMON_ERROR_CODES.FORBIDDEN,
       message: 'You do not have permission to do this.',
     });
   }
