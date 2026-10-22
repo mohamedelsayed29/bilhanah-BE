@@ -1,6 +1,6 @@
 # NestJS Backend
 
-Planned stack: Node.js, NestJS, TypeScript, PostgreSQL, Prisma, Redis, BullMQ, and Socket.IO.
+Stack: Node.js, NestJS, TypeScript, PostgreSQL, Prisma, Redis and BullMQ. Socket.IO is planned for live orders.
 
 | Directory | Responsibility |
 | --- | --- |
@@ -11,7 +11,7 @@ Planned stack: Node.js, NestJS, TypeScript, PostgreSQL, Prisma, Redis, BullMQ, a
 | `src/commands` | Controlled administrator bootstrap and maintenance commands |
 | `test` | Database-backed integration and API tests |
 
-The HTTP API and background worker will use separate entry points in this application and share NestJS modules. The worker is not a fourth application or a separate microservice.
+The HTTP API (`src/main.ts`) and the background worker (`src/worker.ts`) are two entry points of this application and share its NestJS modules. Both run from the same Docker image; the worker's command is `node dist/worker.js`. The worker is not a separate microservice.
 
 A business module can contain its module definition, controllers, services, scoped repository, policies, events, and colocated unit tests. Create these files when implementing the corresponding feature; empty TypeScript stubs are intentionally not generated.
 
@@ -27,6 +27,7 @@ npm install
 npm run services:up      # PostgreSQL 18, Redis 8, Mailpit in Docker
 npm run db:deploy        # apply migrations
 npm run dev:api          # http://127.0.0.1:3000
+npm run dev:worker       # background jobs: email delivery, hourly cleanup
 ```
 
 | Command (root) | Purpose |
@@ -43,6 +44,7 @@ npm run dev:api          # http://127.0.0.1:3000
 - Every response carries `x-request-id`; a well-formed upstream value is kept.
 - Errors use one shape: `{ "error": { "code", "message", "details?", "requestId" } }`. Unexpected errors never expose internal messages.
 - Validate request input with `ZodValidationPipe` and schemas from `packages/contracts`.
+- JSON bodies are limited to 100 kB (413 `PAYLOAD_TOO_LARGE`); malformed JSON is 400 `VALIDATION_FAILED`.
 - Environment variables are validated at startup by `src/config/env.schema.ts`; the process refuses to start with invalid configuration.
 
 The project uses ES modules, so relative imports end in `.js`.
@@ -56,13 +58,20 @@ All routes are under `/v1/auth`. Request bodies are validated by the schemas in 
 | --- | --- |
 | `POST /register` | 202 always; sends a verification email (or an "account exists" email) |
 | `POST /resend-verification` | 202 always |
-| `POST /verify-email` `{ token }` | 204, or 400 `INVALID_TOKEN` |
+| `POST /verify-email` `{ token }` | 200 `{ passwordSetupRequired }`, or 400 `INVALID_TOKEN`. `true` means the account has no password yet and a link to set one was emailed (see below) |
 | `POST /login` | 200 `{ accessToken, accessTokenExpiresIn, user }` and the `bh_refresh` cookie |
 | `POST /refresh` | Rotates the cookie and returns a new access token |
 | `POST /logout` | 204; ends the session and clears the cookie |
 | `POST /forgot-password` | 202 always |
 | `POST /reset-password` `{ token, password }` | 204; signs out every session |
 | `GET /me` | Current user (requires `Authorization: Bearer`) |
+| `GET /sessions` | Active sessions of the caller, with `current` marking this one (Bearer) |
+| `DELETE /sessions/:id` | 204; signs out one of the caller's sessions, 404 for any other ID (Bearer) |
+| `POST /change-password` `{ currentPassword, newPassword }` | 204; signs out every other session and voids reset links. 400 `INVALID_CREDENTIALS` for a wrong current password (Bearer) |
+
+Registering an unconfirmed email a second time with a different password removes the account's password: either registration may have come from someone without access to the inbox. Confirming the email then returns `passwordSetupRequired: true` and sends a reset link, so only the inbox owner sets the password. Accounts never confirmed are deleted after 30 days.
+
+Sessions last `REFRESH_TOKEN_TTL_DAYS` from their last use, but never more than `SESSION_MAX_DAYS` after sign-in. Behind a reverse proxy set `TRUST_PROXY` (for example `1`), or every client shares one rate-limit bucket.
 
 Rules the dashboard must follow:
 
@@ -72,7 +81,7 @@ Rules the dashboard must follow:
 - Email links put the token in the URL fragment: `/verify-email#token=…` and `/reset-password#token=…`.
 - Protect owner routes in other modules with `@UseGuards(AccessTokenGuard)` and read the caller with `@CurrentAuth()`. The guard also checks that the session is still active and the account is not suspended.
 
-Local email is caught by Mailpit at http://127.0.0.1:8025. Email is currently sent in the background from the API process; it moves to the outbox/worker pipeline when that is built. Administrator login (with MFA) is not implemented yet; administrators are rejected by the owner login.
+Local email is caught by Mailpit at http://127.0.0.1:8025. The API queues email in Redis and the worker delivers it, retrying failures with backoff for about five minutes; if Redis is unreachable the API sends directly instead. Run `npm run dev:worker` to receive email locally. Administrator login (with MFA) is not implemented yet; administrators are rejected by the owner login.
 
 ## Restaurants and onboarding
 

@@ -1,7 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createTransport, type Transporter } from 'nodemailer';
 import type { Env } from '../../config/env.schema.js';
+import { EMAIL_JOBS, type EmailJobs } from '../queues/queues.module.js';
+
+// How long to wait for Redis before sending directly instead.
+const ENQUEUE_TIMEOUT_MS = 2_000;
 
 export type EmailMessage = {
   to: string;
@@ -16,7 +20,10 @@ export class MailerService {
   private readonly transporter: Transporter;
   private readonly from: string;
 
-  constructor(config: ConfigService<Env, true>) {
+  constructor(
+    config: ConfigService<Env, true>,
+    @Inject(EMAIL_JOBS) private readonly emailJobs: EmailJobs,
+  ) {
     const user = config.get('SMTP_USER', { infer: true });
     const pass = config.get('SMTP_PASSWORD', { infer: true });
     this.transporter = createTransport({
@@ -33,14 +40,30 @@ export class MailerService {
   }
 
   /**
-   * Sends without delaying the HTTP response, so response timing does not
-   * reveal whether an account exists. Interim until the outbox/worker
-   * pipeline delivers email with retries.
+   * Queues the message for the worker, which retries failed deliveries.
+   * Returns immediately, so response timing does not reveal whether an
+   * account exists. If Redis is unreachable the message is sent directly,
+   * without retries, rather than dropped.
    */
   sendInBackground(message: EmailMessage, purpose: string): void {
-    this.send(message).catch((error: unknown) => {
+    void this.enqueue(message, purpose).catch((error: unknown) => {
       // Never log the message body: it contains single-use tokens.
-      this.logger.error({ err: error, purpose }, 'Email delivery failed');
+      this.logger.warn({ err: error, purpose }, 'Email queue unavailable; sending directly');
+      this.send(message).catch((sendError: unknown) => {
+        this.logger.error({ err: sendError, purpose }, 'Email delivery failed');
+      });
     });
+  }
+
+  private async enqueue(message: EmailMessage, purpose: string): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Timed out queueing email')), ENQUEUE_TIMEOUT_MS);
+    });
+    try {
+      await Promise.race([this.emailJobs.add(purpose, { message, purpose }), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

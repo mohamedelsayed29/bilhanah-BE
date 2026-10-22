@@ -19,6 +19,7 @@
     "db:migrate": "npm run migrate:dev -w @bilhanah/database",
     "db:studio": "npm run studio -w @bilhanah/database",
     "dev:api": "npm run start:dev -w @bilhanah/backend",
+    "dev:worker": "npm run start:worker:dev -w @bilhanah/backend",
     "dev:web": "npm run dev -w @bilhanah/web",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
@@ -27,6 +28,10 @@
     "test:api:e2e": "npm run test:e2e -w @bilhanah/backend",
     "test:web:e2e": "npm run test:e2e -w @bilhanah/web",
     "start:api": "npm run start:prod -w @bilhanah/backend",
-    "admin:create": "npm run admin:create -w @bilhanah/backend"
+    "start:worker": "npm run start:worker -w @bilhanah/backend",
+    "admin:create": "npm run admin:create -w @bilhanah/backend",
+    "build:api": "npm run build -w @bilhanah/backend",
+    "typecheck:api": "npm run typecheck -w @bilhanah/backend",
+    "test:api": "npm run test -w @bilhanah/backend"
   }
 }

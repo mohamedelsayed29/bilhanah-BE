@@ -6,6 +6,7 @@ import { DatabaseModule } from './infrastructure/database/database.module.js';
 import { EmailModule } from './infrastructure/email/email.module.js';
 import { AppLoggerModule } from './infrastructure/observability/logger.module.js';
 import { ObservabilityModule } from './infrastructure/observability/observability.module.js';
+import { QueuesModule } from './infrastructure/queues/queues.module.js';
 import { RedisModule } from './infrastructure/redis/redis.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { RestaurantsModule } from './modules/restaurants/restaurants.module.js';
@@ -16,6 +17,7 @@ import { RestaurantsModule } from './modules/restaurants/restaurants.module.js';
     AppLoggerModule,
     DatabaseModule,
     RedisModule,
+    QueuesModule,
     EmailModule,
     ObservabilityModule,
     AuthModule,
