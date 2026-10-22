@@ -3,7 +3,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-const review = fileURLToPath(new URL('../../../.impeccable/review/', import.meta.url));
+const review = fileURLToPath(new URL('../test-results/review/', import.meta.url));
 
 test('Arabic and English render at desktop and mobile sizes without overflow', async ({ page }) => {
   const errors: string[] = [];

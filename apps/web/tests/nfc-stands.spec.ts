@@ -3,7 +3,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-const review = fileURLToPath(new URL('../.impeccable/review/nfc-stands/', import.meta.url));
+const review = fileURLToPath(new URL('../test-results/review/nfc-stands/', import.meta.url));
 
 test('NFC stand section displays both product views in Arabic and English across screen sizes', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });

@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, typecheck, unit tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  api-e2e:
+    name: API end-to-end tests
+    runs-on: ubuntu-latest
+    # Same host ports as infra/compose.dev.yml, which the e2e config defaults to.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: bilhanah
+          POSTGRES_PASSWORD: bilhanah_dev_password
+          POSTGRES_DB: bilhanah
+        ports: ['55432:5432']
+        options: >-
+          --health-cmd "pg_isready -U bilhanah -d bilhanah"
+          --health-interval 2s --health-retries 30
+      redis:
+        image: redis:8.2-alpine
+        ports: ['56379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run test:api:e2e
+
+  web-e2e:
+    name: Web end-to-end tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx -w @bilhanah/web playwright install --with-deps chromium
+      - run: npm run test:web:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: apps/web/test-results
+          retention-days: 7

@@ -9,7 +9,8 @@ export default defineConfig({
   reporter: 'list',
   use: {
     baseURL: 'http://127.0.0.1:5173',
-    channel: 'chrome',
+    // Installed Chrome locally; CI installs Playwright's Chromium.
+    channel: process.env['CI'] ? undefined : 'chrome',
     viewport: { width: 1440, height: 1000 },
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',

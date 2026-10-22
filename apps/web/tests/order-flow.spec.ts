@@ -3,7 +3,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-const review = fileURLToPath(new URL('../../../.impeccable/review/order-flow/', import.meta.url));
+const review = fileURLToPath(new URL('../test-results/review/order-flow/', import.meta.url));
 test.beforeEach(async () => { await mkdir(review, { recursive: true }); });
 
 test('automatic tour reaches the ready notification, pauses, loops, and stops offscreen', async ({ page }) => {

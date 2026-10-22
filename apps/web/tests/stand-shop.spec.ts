@@ -3,7 +3,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { mkdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-const review = fileURLToPath(new URL('../.impeccable/review/stand-shop/', import.meta.url));
+const review = fileURLToPath(new URL('../test-results/review/stand-shop/', import.meta.url));
 test.beforeEach(async ({ page }) => { await page.emulateMedia({ reducedMotion: 'reduce' }); });
 
 test('two custom designs can be edited, priced, checked out and exported without submitting an order', async ({ page }) => {

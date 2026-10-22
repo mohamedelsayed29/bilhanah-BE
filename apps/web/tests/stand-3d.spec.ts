@@ -3,7 +3,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-const review = fileURLToPath(new URL('../.impeccable/review/stand-3d/', import.meta.url));
+const review = fileURLToPath(new URL('../test-results/review/stand-3d/', import.meta.url));
 
 test('the textured stand rotates through 360 degrees, zooms, resets and follows the selected design', async ({ page }) => {
   const errors: string[] = [];
