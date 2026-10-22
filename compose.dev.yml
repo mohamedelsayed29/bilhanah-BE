@@ -1,0 +1,36 @@
+name: bilhanah-menu
+
+# Local services for the API. Ports match the defaults in bilhanah-BE/vitest.config.e2e.ts.
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: bilhanah
+      POSTGRES_PASSWORD: bilhanah_dev_password
+      POSTGRES_DB: bilhanah
+    ports:
+      - 127.0.0.1:55432:5432
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U bilhanah -d bilhanah]
+      interval: 2s
+      retries: 30
+
+  redis:
+    image: redis:8.2-alpine
+    ports:
+      - 127.0.0.1:56379:6379
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 2s
+      retries: 30
+
+  mailpit:
+    image: axllent/mailpit:v1.30.0
+    ports:
+      - 127.0.0.1:1025:1025
+      - 127.0.0.1:8025:8025
+
+volumes:
+  postgres-data:
