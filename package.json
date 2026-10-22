@@ -1,0 +1,32 @@
+{
+  "name": "bilhanah",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "postinstall": "npm run build:packages",
+    "build:packages": "npm run build -w @bilhanah/contracts -w @bilhanah/database",
+    "services:up": "docker compose -f infra/compose.dev.yml up -d --wait",
+    "services:down": "docker compose -f infra/compose.dev.yml down",
+    "db:deploy": "npm run migrate:deploy -w @bilhanah/database",
+    "db:migrate": "npm run migrate:dev -w @bilhanah/database",
+    "db:studio": "npm run studio -w @bilhanah/database",
+    "dev:api": "npm run start:dev -w @bilhanah/backend",
+    "dev:web": "npm run dev -w @bilhanah/web",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:api:e2e": "npm run test:e2e -w @bilhanah/backend",
+    "test:web:e2e": "npm run test:e2e -w @bilhanah/web",
+    "start:api": "npm run start:prod -w @bilhanah/backend",
+    "admin:create": "npm run admin:create -w @bilhanah/backend"
+  }
+}
