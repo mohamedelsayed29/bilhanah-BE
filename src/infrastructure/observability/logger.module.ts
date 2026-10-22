@@ -27,7 +27,11 @@ export const AppLoggerModule = LoggerModule.forRootAsync({
       autoLogging: { ignore: (request) => request.url?.startsWith('/health') ?? false },
       transport:
         config.get('NODE_ENV', { infer: true }) === 'development'
-          ? { target: 'pino-pretty', options: { singleLine: true } }
+          ? {
+              target: 'pino-pretty',
+              // Headers make every request line unreadable in a terminal.
+              options: { singleLine: true, ignore: 'pid,hostname,req.headers,res.headers,req.params,req.query' },
+            }
           : undefined,
     },
   }),

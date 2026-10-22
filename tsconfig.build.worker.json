@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.build.json",
+  // Watch-mode worker builds here, so it never deletes the API's dist/ mid-build.
+  "compilerOptions": { "outDir": "./dist-worker" }
+}
