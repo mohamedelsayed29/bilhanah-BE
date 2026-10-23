@@ -20,8 +20,11 @@ export type RateLimitRule = {
   name: string;
   limit: number;
   windowSeconds: number;
-  /** What one counter is keyed by. `email` reads the raw request body. */
-  by: 'ip' | 'email' | 'ip+email';
+  /**
+   * What one counter is keyed by. `email` reads the raw request body;
+   * `ip+path` counts per client per URL (e.g. per restaurant's order endpoint).
+   */
+  by: 'ip' | 'email' | 'ip+email' | 'ip+path';
 };
 
 const RATE_LIMIT_RULES = 'rateLimitRules';
@@ -29,11 +32,13 @@ const RATE_LIMIT_RULES = 'rateLimitRules';
 /** Fixed-window limits enforced by RateLimitGuard. All rules must pass. */
 export const RateLimit = (...rules: RateLimitRule[]) => SetMetadata(RATE_LIMIT_RULES, rules);
 
-function identity(request: Request, by: RateLimitRule['by']): string | null {
+/** The value one counter is keyed by, or null when the request lacks it (e.g. no email). */
+export function rateLimitIdentity(request: Pick<Request, 'ip' | 'path' | 'body'>, by: RateLimitRule['by']): string | null {
   const rawEmail: unknown = request.body?.email;
   const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : null;
   const ip = request.ip ?? 'unknown';
   if (by === 'ip') return ip;
+  if (by === 'ip+path') return `${ip}|${request.path}`;
   if (!email) return null;
   return by === 'email' ? email : `${ip}|${email}`;
 }
@@ -56,7 +61,7 @@ export class RateLimitGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<Request>();
     for (const rule of rules) {
-      const id = identity(request, rule.by);
+      const id = rateLimitIdentity(request, rule.by);
       if (id === null) continue;
       // Hash identities so emails and IPs are not stored in Redis keys.
       const key = `rl:${rule.name}:${createHash('sha256').update(id).digest('hex')}`;

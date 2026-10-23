@@ -8,7 +8,6 @@ import {
   placeOrderSchema,
   type PlaceOrderResponse,
   type PublicOrder,
-  trackingTokenSchema,
   updateOrderStatusSchema,
 } from '@bilhanah/contracts';
 import type { z } from 'zod';
@@ -60,7 +59,12 @@ export class PublicOrdersController {
   @Post('restaurants/:subdomain/orders')
   @HttpCode(HttpStatus.CREATED)
   @Header('Cache-Control', 'no-store')
-  @RateLimit({ name: 'place-order:ip', limit: 20, windowSeconds: 10 * 60, by: 'ip' })
+  // Diners at one restaurant often share its Wi-Fi (one IP), so the main limit is per
+  // restaurant; the per-IP cap stops one client spamming many restaurants.
+  @RateLimit(
+    { name: 'place-order:ip-restaurant', limit: 60, windowSeconds: 10 * 60, by: 'ip+path' },
+    { name: 'place-order:ip', limit: 200, windowSeconds: 10 * 60, by: 'ip' },
+  )
   place(
     @Param('subdomain') subdomain: string,
     @Headers('idempotency-key') rawIdempotencyKey: unknown,
@@ -74,7 +78,8 @@ export class PublicOrdersController {
   @Get('orders/:token')
   @Header('Cache-Control', 'no-store')
   @RateLimit({ name: 'track-order:ip', limit: 300, windowSeconds: 60, by: 'ip' })
-  track(@Param('token', new ZodValidationPipe(trackingTokenSchema)) token: string): Promise<PublicOrder> {
+  // Malformed tokens are simply unknown orders (404), like forged ones.
+  track(@Param('token') token: string): Promise<PublicOrder> {
     return this.orders.track(token);
   }
 }

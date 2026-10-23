@@ -307,6 +307,7 @@ export class OrdersService {
       completedAt: order.completedAt?.toISOString() ?? null,
       closedAt: order.closedAt?.toISOString() ?? null,
       rejectionReason: order.rejectionReason,
+      updatedAt: order.updatedAt.toISOString(),
     };
   }
 

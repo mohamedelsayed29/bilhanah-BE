@@ -278,6 +278,37 @@ describe('tables', () => {
   });
 });
 
+describe('rules', () => {
+  it('keeps at least one order type and ordering only on plans that include it', async () => {
+    const menu = await restaurantWithMenu();
+    await http().patch('/v1/restaurants/mine').set(auth(menu.token)).send({ acceptsDineIn: false }).expect(200);
+    const none = await http().patch('/v1/restaurants/mine').set(auth(menu.token)).send({ acceptsPickup: false }).expect(400);
+    expect(none.body.error.code).toBe('VALIDATION_FAILED');
+
+    await http().patch('/v1/restaurants/mine').set(auth(menu.token)).send({ orderingEnabled: false }).expect(200);
+    await t.prisma.entitlement.updateMany({ data: { planCode: 'MENU' } });
+    const upsell = await http().patch('/v1/restaurants/mine').set(auth(menu.token)).send({ orderingEnabled: true }).expect(409);
+    expect(upsell.body.error.code).toBe('ORDERING_UNAVAILABLE');
+  });
+
+  it('needs a reason to reject or cancel, and stamps every change', async () => {
+    const menu = await restaurantWithMenu();
+    const placed = await placeOrder(menu).expect(201);
+    expect(placed.body.order.updatedAt).toEqual(expect.any(String));
+    const [{ id }] = (await http().get('/v1/orders').set(auth(menu.token)).expect(200)).body.items;
+
+    expect((await setStatus(menu.token, id, 'REJECTED').expect(400)).body.error.code).toBe('VALIDATION_FAILED');
+    const accepted = await setStatus(menu.token, id, 'ACCEPTED').expect(200);
+    expect(Date.parse(accepted.body.updatedAt)).toBeGreaterThanOrEqual(Date.parse(placed.body.order.updatedAt));
+    await setStatus(menu.token, id, 'CANCELLED').expect(400);
+    await setStatus(menu.token, id, 'CANCELLED', 'Gas cut').expect(200);
+  });
+
+  it('treats malformed tracking links as unknown orders', async () => {
+    await http().get('/v1/public/orders/not-a-token').expect(404);
+  });
+});
+
 describe('live updates', () => {
   it('pushes new orders to the restaurant and status changes to both sides', async () => {
     const menu = await restaurantWithMenu();
@@ -304,6 +335,15 @@ describe('live updates', () => {
     expect(leaked).toBe(false);
 
     for (const socket of [owner, outsider, diner]) socket.close();
+  });
+
+  it("tells the owner's other devices when ordering settings change", async () => {
+    const menu = await restaurantWithMenu();
+    const owner = await connect('/owner', menu.token);
+    const update = nextEvent<{ ordering: { paused: boolean } }>(owner, 'restaurant.updated');
+    await http().patch('/v1/restaurants/mine').set(auth(menu.token)).send({ ordersPaused: true }).expect(200);
+    expect((await update).ordering.paused).toBe(true);
+    owner.close();
   });
 
   it('refuses sockets without a valid token', async () => {

@@ -1,7 +1,9 @@
-import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   AUTH_ERROR_CODES,
+  COMMON_ERROR_CODES,
+  ORDER_ERROR_CODES,
   type createRestaurantSchema,
   normalizeSubdomain,
   type OpeningHours,
@@ -21,6 +23,7 @@ import { isUniqueViolation } from '../../infrastructure/database/prisma-errors.j
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { MediaService } from '../media/media.service.js';
 import { MenusService } from '../menus/menus.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { hasAccess } from '../subscriptions/access.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
 
@@ -55,6 +58,7 @@ export class RestaurantsService {
     private readonly subscriptions: SubscriptionsService,
     private readonly media: MediaService,
     private readonly menus: MenusService,
+    private readonly realtime: RealtimeService,
     config: ConfigService<Env, true>,
   ) {
     this.urlTemplate = config.get('RESTAURANT_URL_TEMPLATE', { infer: true });
@@ -105,12 +109,28 @@ export class RestaurantsService {
   }
 
   async updateMine(ownerId: string, input: z.output<typeof updateRestaurantSchema>): Promise<OwnerRestaurant> {
-    const restaurant = await this.prisma.restaurant.findUnique({ where: { ownerId }, select: { id: true, status: true } });
+    const restaurant = await this.prisma.restaurant.findUnique({
+      where: { ownerId },
+      select: { id: true, status: true, acceptsDineIn: true, acceptsPickup: true },
+    });
     if (!restaurant) throw notFound();
     if (restaurant.status === 'SUSPENDED') {
       throw new ForbiddenException({
         code: RESTAURANT_ERROR_CODES.RESTAURANT_SUSPENDED,
         message: 'This restaurant is suspended. Please contact Bilhanah support.',
+      });
+    }
+    if ((input.acceptsDineIn ?? restaurant.acceptsDineIn) === false && (input.acceptsPickup ?? restaurant.acceptsPickup) === false) {
+      throw new BadRequestException({
+        code: COMMON_ERROR_CODES.VALIDATION_FAILED,
+        message: 'Keep dine-in or pickup on.',
+        details: [{ path: 'acceptsPickup', code: 'custom', message: 'Keep dine-in or pickup on.' }],
+      });
+    }
+    if (input.orderingEnabled === true && !(await this.subscriptions.accessFor(restaurant)).features.ordering) {
+      throw new ConflictException({
+        code: ORDER_ERROR_CODES.ORDERING_UNAVAILABLE,
+        message: 'Your plan does not include ordering. Upgrade to take orders.',
       });
     }
     if (input.logoId) await this.media.assertUsable(restaurant.id, input.logoId, 'LOGO');
@@ -124,7 +144,10 @@ export class RestaurantsService {
       },
       include: withBranding,
     });
-    return this.toOwnerRestaurant(updated);
+    const view = await this.toOwnerRestaurant(updated);
+    const orderingChanged = ['orderingEnabled', 'acceptsDineIn', 'acceptsPickup', 'ordersPaused'].some((key) => key in input);
+    if (orderingChanged) this.realtime.emitRestaurantUpdated(restaurant.id, view.ordering);
+    return view;
   }
 
   /**

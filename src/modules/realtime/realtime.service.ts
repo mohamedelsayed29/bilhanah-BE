@@ -3,8 +3,10 @@ import { HttpAdapterHost } from '@nestjs/core';
 import {
   type OwnerOrder,
   type OwnerOrderEvent,
+  type OrderingSettings,
   type PublicOrder,
   REALTIME_EVENTS,
+  type RestaurantUpdatedEvent,
   REALTIME_PATH,
   type TrackedOrderEvent,
 } from '@bilhanah/contracts';
@@ -82,6 +84,11 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
   emitOrderUpdated(restaurantId: string, ownerView: OwnerOrder, publicView: PublicOrder): void {
     this.owners?.to(restaurantRoom(restaurantId)).emit(REALTIME_EVENTS.ORDER_UPDATED, { order: ownerView } satisfies OwnerOrderEvent);
     this.trackers?.to(orderRoom(ownerView.id)).emit(REALTIME_EVENTS.ORDER_UPDATED, { order: publicView } satisfies TrackedOrderEvent);
+  }
+
+  /** Tells the owner's other devices that ordering settings changed (e.g. orders paused). */
+  emitRestaurantUpdated(restaurantId: string, ordering: OrderingSettings): void {
+    this.owners?.to(restaurantRoom(restaurantId)).emit(REALTIME_EVENTS.RESTAURANT_UPDATED, { ordering } satisfies RestaurantUpdatedEvent);
   }
 
   async onApplicationShutdown(): Promise<void> {

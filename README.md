@@ -134,20 +134,20 @@ Images are stored with `STORAGE_DRIVER=local` (in `var/media`, served at `/media
 
 ## Ordering
 
-Diners order from the public menu without an account; the restaurant handles orders on a live board. Schemas: `packages/contracts/src/orders.ts`. Orders flow only when the plan includes ordering (Orders, Full Experience) **and** the owner has switched it on (`PATCH /restaurants/mine` `{ orderingEnabled, acceptsDineIn, acceptsPickup, ordersPaused }`); `GET /public/restaurants/:subdomain` exposes `ordering.accepting`.
+Diners order from the public menu without an account; the restaurant handles orders on a live board. Schemas: `packages/contracts/src/orders.ts`. Orders flow only when the plan includes ordering (Orders, Full Experience) **and** the owner has switched it on (`PATCH /restaurants/mine` `{ orderingEnabled, acceptsDineIn, acceptsPickup, ordersPaused }`; at least one order type stays on, and switching ordering on needs a plan that includes it); `GET /public/restaurants/:subdomain` exposes `ordering.accepting`.
 
 | Route | Result |
 | --- | --- |
-| `POST /public/restaurants/:subdomain/orders` + `Idempotency-Key` header | 201 `{ trackingToken, order }`. Names and prices come from the menu (clients send ids, sizes, quantities and notes only). A retry with the same key returns the same order. 409 `ORDERING_UNAVAILABLE`, `RESTAURANT_CLOSED` (opening hours), `ITEMS_UNAVAILABLE` (`details.menuItemIds`); 404 `TABLE_NOT_FOUND`. Dine-in needs `tableCode` (from the table QR) or `tableLabel`; pickup needs `customerPhone` |
+| `POST /public/restaurants/:subdomain/orders` + `Idempotency-Key` header | 201 `{ trackingToken, order }`. Names and prices come from the menu (clients send ids, sizes, quantities and notes only). A retry with the same key returns the same order. 409 `ORDERING_UNAVAILABLE`, `RESTAURANT_CLOSED` (opening hours), `ITEMS_UNAVAILABLE` (`details.menuItemIds`); 400 `ORDER_TYPE_UNAVAILABLE`; 404 `TABLE_NOT_FOUND`. Limited to 60 orders per 10 minutes per client IP per restaurant (diners often share the restaurant's Wi-Fi) and 200 per IP overall Dine-in needs `tableCode` (from the table QR) or `tableLabel`; pickup needs `customerPhone` |
 | `GET /public/orders/:trackingToken` | The diner's order and status (no phone number) |
 | `GET /public/restaurants/:subdomain/tables/:code` | `{ label }` of a scanned table |
 | `GET /orders?view=active\|history` (owner) | The board (oldest first) or closed orders (newest first) |
-| `PATCH /orders/:id/status` `{ status, reason? }` | Only the transitions in `ORDER_TRANSITIONS` (PLACED → ACCEPTED/REJECTED → PREPARING → READY → COMPLETED, or CANCELLED); 409 `INVALID_STATUS_CHANGE` otherwise or when another device moved it first |
+| `PATCH /orders/:id/status` `{ status, reason? }` | A reason is required to reject or cancel (shown to the diner). Only the transitions in `ORDER_TRANSITIONS` (PLACED → ACCEPTED/REJECTED → PREPARING → READY → COMPLETED, or CANCELLED); 409 `INVALID_STATUS_CHANGE` otherwise or when another device moved it first |
 | `GET/POST /tables`, `POST /tables/range` `{ from, to, prefix }`, `PATCH`/`DELETE /tables/:id`, `POST /tables/:id/code` | Tables and their QR links (`qrUrl` = `{publicUrl}/?t={code}`); a new code retires printed ones |
 
 Order numbers restart at #1 each day in the restaurant's time zone. Tracking tokens are the order id plus an HMAC, so they cannot be guessed and a retried checkout gets the same link.
 
-**Live updates** use Socket.IO at path `/v1/realtime`, WebSocket transport only (no sticky sessions needed behind the load balancer; a Redis adapter relays events between API replicas). Namespace `/owner` with `auth: { token: <access token> }` receives `order.created` and `order.updated` for the owner's restaurant and is disconnected when the token expires (reconnect with a fresh one). Namespace `/track` with `auth: { token: <tracking token> }` receives `order.updated` for that order. Clients should also refetch on reconnect.
+**Live updates** use Socket.IO at path `/v1/realtime`, WebSocket transport only (no sticky sessions needed behind the load balancer; a Redis adapter relays events between API replicas). Namespace `/owner` with `auth: { token: <access token> }` receives `order.created`, `order.updated` and `restaurant.updated` (ordering settings changed, e.g. paused on another device) for the owner's restaurant and is disconnected when the token expires (reconnect with a fresh one). Namespace `/track` with `auth: { token: <tracking token> }` receives `order.updated` for that order. Clients should also refetch on reconnect.
 
 ## Subscriptions and billing (manual transfer)
 
