@@ -29,6 +29,11 @@ Object.assign(process.env, {
   STORAGE_LOCAL_DIR: join(tmpdir(), 'bilhanah-e2e-media'),
   MEDIA_PUBLIC_URL: 'http://api.test/media',
   CONTACT_INBOX: 'hello@bilhanah.test',
+  // Required by config validation; tests swap in a fake mailer, so nothing connects here.
+  SMTP_HOST: '127.0.0.1',
+  SMTP_PORT: '1025',
+  SMTP_SECURE: 'false',
+  MAIL_FROM: 'Bilhanah <no-reply@bilhanah.test>',
 });
 
 export default defineConfig({
