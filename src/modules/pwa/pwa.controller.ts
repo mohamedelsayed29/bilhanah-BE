@@ -4,7 +4,10 @@ import type { Request, Response } from 'express';
 import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
 import { ICON_SIZES, PwaService, type WebAppManifest } from './pwa.service.js';
 
-/** Home Screen install for restaurant menus. Cacheable: nothing here depends on the subscription. */
+/**
+ * Home Screen install for restaurant menus. Cacheable: nothing here depends on the subscription.
+ * Loaded by restaurant sites on other origins, so helmet's same-origin resource policy is lifted.
+ */
 @Controller('public/restaurants')
 @UseGuards(RateLimitGuard)
 export class PwaController {
@@ -12,6 +15,7 @@ export class PwaController {
 
   @Get(':subdomain/manifest.webmanifest')
   @Header('Cache-Control', 'public, max-age=300')
+  @Header('Cross-Origin-Resource-Policy', 'cross-origin')
   @RateLimit({ name: 'pwa:ip', limit: 600, windowSeconds: 60, by: 'ip' })
   async manifest(
     @Param('subdomain') subdomain: string,
@@ -26,6 +30,7 @@ export class PwaController {
 
   @Get(':subdomain/icon-:size.png')
   @Header('Cache-Control', 'public, max-age=86400')
+  @Header('Cross-Origin-Resource-Policy', 'cross-origin')
   @RateLimit({ name: 'pwa:ip', limit: 600, windowSeconds: 60, by: 'ip' })
   async icon(
     @Param('subdomain') subdomain: string,

@@ -333,6 +333,7 @@ describe('Home Screen install', () => {
     expect(response.headers['content-type']).toMatch(/^application\/manifest\+json/);
     expect(response.headers['access-control-allow-origin']).toBe('*');
     expect(response.headers['cache-control']).toBe('public, max-age=300');
+    expect(response.headers['cross-origin-resource-policy']).toBe('cross-origin');
     const manifest = JSON.parse(response.text);
     const host = response.request.url.replace(/\/v1\/.*$/, '');
     expect(manifest).toEqual({
@@ -369,6 +370,7 @@ describe('Home Screen install', () => {
       const icon = await http().get(`/v1/public/restaurants/koshary/icon-${size}.png`).expect(200);
       expect(icon.headers['content-type']).toBe('image/png');
       expect(icon.headers['cache-control']).toBe('public, max-age=86400');
+      expect(icon.headers['cross-origin-resource-policy']).toBe('cross-origin');
       expect(await sharp(icon.body as Buffer).metadata()).toMatchObject({ width: size, height: size, format: 'png' });
     }
     const wrong = await http().get('/v1/public/restaurants/koshary/icon-100.png').expect(404);
