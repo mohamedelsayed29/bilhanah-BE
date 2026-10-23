@@ -8,3 +8,5 @@ export * from './opening-hours.js';
 export * from './public.js';
 export * from './hours.js';
 export * from './subdomains.js';
+export * from './billing.js';
+export * from './admin.js';

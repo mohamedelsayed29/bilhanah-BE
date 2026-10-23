@@ -23,3 +23,10 @@ export type RestaurantAccess = {
   currentPeriodEndsAt: string | null;
   trialEndsAt: string | null;
 };
+
+/** Display names, matching the website's pricing section. */
+export const PLAN_NAMES: Record<PlanCode, { ar: string; en: string }> = {
+  MENU: { ar: 'منيو', en: 'Menu' },
+  ORDERS: { ar: 'منيو وطلبات', en: 'Menu & Orders' },
+  ADVANCED: { ar: 'التجربة الكاملة', en: 'The Full Experience' },
+};

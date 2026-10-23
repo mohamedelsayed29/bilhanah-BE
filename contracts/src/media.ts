@@ -12,7 +12,7 @@ export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
 export const MEDIA_MIN_DIMENSION = 200;
 export const MEDIA_ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 
-export const mediaKindSchema = z.enum(['LOGO', 'COVER', 'ITEM']);
+export const mediaKindSchema = z.enum(['LOGO', 'COVER', 'ITEM', 'PAYMENT_PROOF']);
 export type MediaKind = z.infer<typeof mediaKindSchema>;
 
 export const uploadMediaQuerySchema = z.strictObject({ kind: mediaKindSchema });

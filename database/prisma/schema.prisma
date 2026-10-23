@@ -74,6 +74,10 @@ model User {
   status            UserStatus @default(ACTIVE)
   emailVerifiedAt   DateTime?  @map("email_verified_at") @db.Timestamptz(3)
   passwordChangedAt DateTime?  @map("password_changed_at") @db.Timestamptz(3)
+  /// Administrators only: TOTP secret, AES-256-GCM encrypted (see TotpService).
+  totpSecret        String?    @map("totp_secret")
+  /// Last accepted TOTP time step, so a code cannot be used twice.
+  totpLastStep      Int?       @map("totp_last_step")
   createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -81,6 +85,9 @@ model User {
   emailVerificationTokens EmailVerificationToken[]
   passwordResetTokens     PasswordResetToken[]
   restaurant              Restaurant?
+  reviewedPayments        SubscriptionPayment[]
+  grantedEntitlements     Entitlement[]
+  auditLogs               AuditLog[]
 
   @@map("users")
 }
@@ -161,13 +168,15 @@ model Restaurant {
   createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  owner        User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  owner        User                  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   entitlements Entitlement[]
-  logo         Media?        @relation("RestaurantLogo", fields: [logoId], references: [id], onDelete: SetNull)
-  cover        Media?        @relation("RestaurantCover", fields: [coverId], references: [id], onDelete: SetNull)
-  media        Media[]       @relation("RestaurantMedia")
+  logo         Media?                @relation("RestaurantLogo", fields: [logoId], references: [id], onDelete: SetNull)
+  cover        Media?                @relation("RestaurantCover", fields: [coverId], references: [id], onDelete: SetNull)
+  media        Media[]               @relation("RestaurantMedia")
   categories   Category[]
   menuItems    MenuItem[]
+  payments     SubscriptionPayment[]
+  reminders    ExpiryReminder[]
 
   @@map("restaurants")
 }
@@ -176,6 +185,8 @@ enum MediaKind {
   LOGO
   COVER
   ITEM
+  /// A transfer receipt. Stored under private/ and never served publicly.
+  PAYMENT_PROOF
 
   @@map("media_kind")
 }
@@ -194,10 +205,11 @@ model Media {
   bytes         Int
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  restaurant Restaurant   @relation("RestaurantMedia", fields: [restaurantId], references: [id], onDelete: Cascade)
-  logoFor    Restaurant[] @relation("RestaurantLogo")
-  coverFor   Restaurant[] @relation("RestaurantCover")
-  menuItems  MenuItem[]
+  restaurant    Restaurant            @relation("RestaurantMedia", fields: [restaurantId], references: [id], onDelete: Cascade)
+  logoFor       Restaurant[]          @relation("RestaurantLogo")
+  coverFor      Restaurant[]          @relation("RestaurantCover")
+  menuItems     MenuItem[]
+  paymentProofs SubscriptionPayment[]
 
   @@index([restaurantId])
   @@map("media")
@@ -270,6 +282,7 @@ model Plan {
 
   entitlements  Entitlement[]
   trialSettings TrialSettings[]
+  payments      SubscriptionPayment[]
 
   @@map("plans")
 }
@@ -282,10 +295,16 @@ model Entitlement {
   planCode     PlanCode        @map("plan_code")
   startsAt     DateTime        @map("starts_at") @db.Timestamptz(3)
   endsAt       DateTime        @map("ends_at") @db.Timestamptz(3)
+  /// Administrator who granted it by hand (null for trials and approved payments).
+  grantedById  String?         @map("granted_by_id") @db.Uuid
+  note         String?         @db.VarChar(300)
   createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  plan       Plan       @relation(fields: [planCode], references: [code])
+  restaurant Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  plan       Plan                 @relation(fields: [planCode], references: [code])
+  grantedBy  User?                @relation(fields: [grantedById], references: [id], onDelete: SetNull)
+  payment    SubscriptionPayment?
+  reminders  ExpiryReminder[]
 
   @@index([restaurantId])
   @@map("entitlements")
@@ -302,4 +321,105 @@ model TrialSettings {
   plan Plan @relation(fields: [planCode], references: [code])
 
   @@map("trial_settings")
+}
+
+enum PaymentMethod {
+  INSTAPAY
+  VODAFONE_CASH
+  BANK_TRANSFER
+
+  @@map("payment_method")
+}
+
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  /// Withdrawn by the owner before review.
+  CANCELLED
+
+  @@map("payment_status")
+}
+
+/// A subscription paid by manual transfer and reviewed by an administrator.
+/// At most one PENDING payment per restaurant (partial unique index in SQL).
+model SubscriptionPayment {
+  id              String        @id @default(uuid()) @db.Uuid
+  restaurantId    String        @map("restaurant_id") @db.Uuid
+  planCode        PlanCode      @map("plan_code")
+  months          Int
+  /// Computed by the server from the plan price at submission.
+  amountPiastres  Int           @map("amount_piastres")
+  method          PaymentMethod
+  /// Transfer reference from the payer's receipt or SMS.
+  reference       String        @db.VarChar(100)
+  payerName       String?       @map("payer_name") @db.VarChar(80)
+  proofId         String?       @map("proof_id") @db.Uuid
+  status          PaymentStatus @default(PENDING)
+  /// The paid period created on approval.
+  entitlementId   String?       @unique @map("entitlement_id") @db.Uuid
+  reviewedById    String?       @map("reviewed_by_id") @db.Uuid
+  reviewedAt      DateTime?     @map("reviewed_at") @db.Timestamptz(3)
+  rejectionReason String?       @map("rejection_reason") @db.VarChar(300)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant  Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  plan        Plan         @relation(fields: [planCode], references: [code])
+  proof       Media?       @relation(fields: [proofId], references: [id], onDelete: SetNull)
+  entitlement Entitlement? @relation(fields: [entitlementId], references: [id], onDelete: SetNull)
+  reviewedBy  User?        @relation(fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([restaurantId, createdAt])
+  @@map("subscription_payments")
+}
+
+/// Where owners send money; edited by administrators. A single row with id 1.
+model PaymentSettings {
+  id                 Int      @id @default(1)
+  instapayAddress    String?  @map("instapay_address") @db.VarChar(100)
+  vodafoneCashNumber String?  @map("vodafone_cash_number") @db.VarChar(20)
+  bankName           String?  @map("bank_name") @db.VarChar(80)
+  bankAccountName    String?  @map("bank_account_name") @db.VarChar(100)
+  bankAccountNumber  String?  @map("bank_account_number") @db.VarChar(40)
+  notesAr            String?  @map("notes_ar") @db.VarChar(500)
+  notesEn            String?  @map("notes_en") @db.VarChar(500)
+  updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("payment_settings")
+}
+
+/// Administrator actions, kept for accountability.
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  action     String   @db.VarChar(60)
+  targetType String   @map("target_type") @db.VarChar(40)
+  targetId   String?  @map("target_id") @db.VarChar(64)
+  metadata   Json?
+  ipAddress  String?  @map("ip_address") @db.VarChar(64)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
+}
+
+/// Sent expiry reminders, so each goes out once per period.
+model ExpiryReminder {
+  id            String   @id @default(uuid()) @db.Uuid
+  restaurantId  String   @map("restaurant_id") @db.Uuid
+  entitlementId String   @map("entitlement_id") @db.Uuid
+  /// Days before the period ends; 0 means it has ended.
+  daysBefore    Int      @map("days_before")
+  sentAt        DateTime @default(now()) @map("sent_at") @db.Timestamptz(3)
+
+  restaurant  Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  entitlement Entitlement @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
+
+  @@unique([entitlementId, daysBefore])
+  @@map("expiry_reminders")
 }
