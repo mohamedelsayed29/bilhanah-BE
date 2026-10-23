@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs Bilhanah locally: Docker services, migrations, then the API, the
-# background worker and the website together. Ctrl+C stops the apps; the
+# background worker, the website and the dashboard together. Ctrl+C stops the apps; the
 # Docker services keep running (stop them with `npm run services:down`).
 #
 #   bash scripts/dev.sh            # or: npm run dev
@@ -11,6 +11,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 WEB_PORT="${WEB_PORT:-5180}"
+# Fixed: the API allows this origin (CORS_ORIGINS) and email links point at it (DASHBOARD_URL).
+DASHBOARD_PORT=5174
 
 bold=$'\e[1m' red=$'\e[31m' green=$'\e[32m' yellow=$'\e[33m' blue=$'\e[34m' magenta=$'\e[35m' cyan=$'\e[36m' reset=$'\e[0m'
 step() { printf '%s==>%s %s\n' "$bold$blue" "$reset" "$*"; }
@@ -35,7 +37,7 @@ API_PORT="$(sed -n 's/^PORT=//p' .env | tail -1)"
 API_PORT="${API_PORT:-3000}"
 
 port_in_use() { ss -ltnH "sport = :$1" 2>/dev/null | grep -q .; }
-for port in "$API_PORT" "$WEB_PORT"; do
+for port in "$API_PORT" "$WEB_PORT" "$DASHBOARD_PORT"; do
   if port_in_use "$port"; then
     holder="$(ss -ltnpH "sport = :$port" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)"
     detail=""
@@ -81,11 +83,12 @@ start() {
   pids+=("$!")
 }
 
-step "Starting the API, worker and website"
+step "Starting the API, worker, website and dashboard"
 start api "$green" "npm run --silent dev:api"
 start worker "$magenta" "npm run --silent dev:worker"
 start web "$cyan" "VITE_API_URL=http://127.0.0.1:$API_PORT VITE_ROOT_DOMAIN=localhost \
-  npm run --silent dev -w @bilhanah/web -- --port $WEB_PORT --strictPort"
+  VITE_DASHBOARD_URL=http://127.0.0.1:$DASHBOARD_PORT npm run --silent dev -w @bilhanah/web -- --port $WEB_PORT --strictPort"
+start dashboard "$yellow" "VITE_API_URL=http://127.0.0.1:$API_PORT npm run --silent dev -w @bilhanah/dashboard"
 
 # Wait for the API, then print where everything is.
 for _ in $(seq 1 120); do
@@ -98,6 +101,7 @@ if curl -sf "http://127.0.0.1:$API_PORT/health/ready" >/dev/null 2>&1; then
 ${bold}${green}Bilhanah is running${reset}
   Website            http://127.0.0.1:$WEB_PORT
   Restaurant pages   http://<subdomain>.localhost:$WEB_PORT
+  Dashboard          http://127.0.0.1:$DASHBOARD_PORT
   API                http://127.0.0.1:$API_PORT  (health: /health/ready)
   Email (Mailpit)    http://127.0.0.1:8025
   Database           postgresql://127.0.0.1:55432/bilhanah  (npm run db:studio)
