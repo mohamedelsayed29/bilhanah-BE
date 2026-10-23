@@ -6,7 +6,7 @@ import helmet from 'helmet';
 import { jsonBody } from './common/http/json-body.js';
 import type { Env } from './config/env.schema.js';
 import { LocalStorageService } from './infrastructure/storage/local-storage.service.js';
-import { StorageService } from './infrastructure/storage/storage.service.js';
+import { PRIVATE_PREFIX, StorageService } from './infrastructure/storage/storage.service.js';
 
 /** HTTP configuration shared by the server bootstrap and e2e tests. */
 export function configureApp(app: NestExpressApplication): void {
@@ -19,6 +19,10 @@ export function configureApp(app: NestExpressApplication): void {
   // restaurant pages on other origins must be allowed to embed them.
   const storage = app.get(StorageService);
   if (storage instanceof LocalStorageService) {
+    // Payment receipts are only streamed by the API to their owner and administrators.
+    app.use(`/media/${PRIVATE_PREFIX}`, (_request: express.Request, response: express.Response) => {
+      response.status(404).end();
+    });
     app.use(
       '/media',
       express.static(storage.root, {

@@ -7,6 +7,10 @@ import { configureApp } from '../src/app.setup.js';
 import { PrismaService } from '../src/infrastructure/database/prisma.service.js';
 import { type EmailMessage, MailerService } from '../src/infrastructure/email/mailer.service.js';
 import { REDIS } from '../src/infrastructure/redis/redis.module.js';
+import { SecretBox } from '../src/common/crypto/secret-box.js';
+import { base32Decode, totpCode, totpStep } from '../src/common/crypto/totp.js';
+import { createAdmin } from '../src/commands/create-admin.js';
+import { PasswordService } from '../src/modules/auth/password.service.js';
 
 export const DASHBOARD_ORIGIN = 'http://dashboard.test';
 
@@ -60,7 +64,14 @@ export async function createTestApp(): Promise<TestApp> {
     prisma,
     reset: async () => {
       // Cascades to sessions, tokens, restaurants and entitlements.
-      await prisma.$executeRawUnsafe('TRUNCATE TABLE users CASCADE');
+      await prisma.$executeRawUnsafe('TRUNCATE TABLE users, audit_logs CASCADE');
+      await prisma.paymentSettings.update({
+        where: { id: 1 },
+        data: { instapayAddress: null, vodafoneCashNumber: null, bankName: null, bankAccountName: null, bankAccountNumber: null, notesAr: null, notesEn: null },
+      });
+      for (const [code, priceMonthlyPiastres] of [['MENU', 20000], ['ORDERS', 35000], ['ADVANCED', 50000]] as const) {
+        await prisma.plan.update({ where: { code }, data: { priceMonthlyPiastres } });
+      }
       await prisma.trialSettings.update({
         where: { id: 1 },
         data: { enabled: true, durationDays: 30, planCode: 'ADVANCED' },
@@ -85,4 +96,29 @@ export async function signUpOwner(t: TestApp, email: string, password = 'correct
     .send({ email, password })
     .expect(200);
   return response.body.accessToken as string;
+}
+
+/** Creates an administrator with an authenticator secret and signs in; returns the access token and secret. */
+export async function signInAdmin(t: TestApp, email = 'admin@bilhanah.test'): Promise<{ token: string; secret: string }> {
+  const passwords = t.app.get(PasswordService);
+  const admin = await createAdmin(
+    t.prisma,
+    (value) => passwords.hash(value),
+    { email, fullName: 'Platform Admin', password: ADMIN_PASSWORD },
+    t.app.get(SecretBox),
+  );
+  const secret = admin.totpSecret!;
+  const response = await request(t.app.getHttpServer())
+    .post('/v1/auth/admin/login')
+    .set('Origin', DASHBOARD_ORIGIN)
+    .send({ email, password: ADMIN_PASSWORD, code: currentCode(secret) })
+    .expect(200);
+  return { token: response.body.accessToken as string, secret };
+}
+
+export const ADMIN_PASSWORD = 'admin-password-long-enough';
+
+/** The authenticator code for `secret`, `offset` steps from now. */
+export function currentCode(secret: string, offset = 0): string {
+  return totpCode(base32Decode(secret), totpStep(new Date()) + offset);
 }

@@ -6,7 +6,10 @@ import { AppConfigModule } from '../config/config.module.js';
 import { DatabaseModule } from '../infrastructure/database/database.module.js';
 import { PrismaService } from '../infrastructure/database/prisma.service.js';
 import { PasswordService } from '../modules/auth/password.service.js';
-import { createAdmin, CreateAdminError } from './create-admin.js';
+import { CryptoModule } from '../common/crypto/crypto.module.js';
+import { SecretBox } from '../common/crypto/secret-box.js';
+import { otpauthUri } from '../common/crypto/totp.js';
+import { authenticatorInstructions, createAdmin, CreateAdminError } from './create-admin.js';
 
 const USAGE = `Usage: npm run admin:create -- --email <email> --name "<full name>"
 
@@ -14,7 +17,7 @@ The password is read from an interactive prompt, or from the first line of
 standard input when piped. It is never accepted as an argument.`;
 
 @Module({
-  imports: [AppConfigModule, DatabaseModule],
+  imports: [AppConfigModule, DatabaseModule, CryptoModule],
   providers: [PasswordService],
 })
 class CreateAdminCommandModule {}
@@ -72,13 +75,14 @@ async function main(): Promise<void> {
   const app = await NestFactory.createApplicationContext(CreateAdminCommandModule, { logger: ['error'] });
   try {
     const passwords = app.get(PasswordService);
-    const admin = await createAdmin(app.get(PrismaService), (value) => passwords.hash(value), {
-      email: values.email,
-      fullName: values.name,
-      password,
-    });
-    console.log(`Administrator created: ${admin.email} (${admin.id})`);
-    console.log('Administrator sign-in with two-factor authentication is not available yet.');
+    const admin = await createAdmin(
+      app.get(PrismaService),
+      (value) => passwords.hash(value),
+      { email: values.email, fullName: values.name, password },
+      app.get(SecretBox),
+    );
+    console.log(`Administrator created: ${admin.email} (${admin.id})\n`);
+    console.log(authenticatorInstructions(admin.email, admin.totpSecret!, otpauthUri(admin.totpSecret!, admin.email)));
   } finally {
     await app.close();
   }

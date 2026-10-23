@@ -11,6 +11,8 @@ import {
   AUTH_ERROR_CODES,
   type AuthSession,
   type AuthUser,
+  ADMIN_ERROR_CODES,
+  type adminLoginSchema,
   type changePasswordSchema,
   type updateProfileSchema,
   COMMON_ERROR_CODES,
@@ -19,7 +21,9 @@ import {
   type SessionResponse,
   type VerifyEmailResponse,
 } from '@bilhanah/contracts';
-import type { User } from '@bilhanah/database';
+import type { User, UserRole } from '@bilhanah/database';
+import { SecretBox } from '../../common/crypto/secret-box.js';
+import { verifyTotp } from '../../common/crypto/totp.js';
 import type { z } from 'zod';
 import type { Env } from '../../config/env.schema.js';
 import { isUniqueViolation } from '../../infrastructure/database/prisma-errors.js';
@@ -81,17 +85,20 @@ export class AuthService {
   private readonly dashboardUrl: string;
   private readonly refreshTtlMs: number;
   private readonly sessionMaxMs: number;
+  private readonly adminSessionMaxMs: number;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly passwords: PasswordService,
     private readonly accessTokens: AccessTokenService,
     private readonly mailer: MailerService,
+    private readonly secrets: SecretBox,
     config: ConfigService<Env, true>,
   ) {
     this.dashboardUrl = config.get('DASHBOARD_URL', { infer: true }).replace(/\/$/, '');
     this.refreshTtlMs = config.get('REFRESH_TOKEN_TTL_DAYS', { infer: true }) * DAY_MS;
     this.sessionMaxMs = config.get('SESSION_MAX_DAYS', { infer: true }) * DAY_MS;
+    this.adminSessionMaxMs = config.get('ADMIN_SESSION_HOURS', { infer: true }) * 60 * 60 * 1000;
   }
 
   async register(input: z.output<typeof registerOwnerSchema>): Promise<void> {
@@ -185,6 +192,39 @@ export class AuthService {
       });
     }
 
+    return this.startSession(user, meta);
+  }
+
+  /**
+   * Administrator sign-in: password plus a code from their authenticator app.
+   * Wrong password and wrong code give the same answer.
+   */
+  async adminLogin(input: z.output<typeof adminLoginSchema>, meta: ClientMeta): Promise<IssuedSession> {
+    const user = await this.prisma.user.findUnique({ where: { email: input.email } });
+    const passwordValid = await this.passwords.verify(user?.passwordHash ?? undefined, input.password);
+    if (!user || !passwordValid || user.role !== 'ADMIN') throw invalidCredentials();
+    if (user.status !== 'ACTIVE') {
+      throw new ForbiddenException({ code: AUTH_ERROR_CODES.ACCOUNT_SUSPENDED, message: 'This account is suspended.' });
+    }
+    if (!user.totpSecret) {
+      throw new ForbiddenException({
+        code: ADMIN_ERROR_CODES.MFA_NOT_SET_UP,
+        message: 'Two-factor sign-in is not set up for this account. Ask an operator to run admin:reset-mfa.',
+      });
+    }
+
+    const step = verifyTotp(this.secrets.open(user.totpSecret), input.code, new Date(), user.totpLastStep);
+    if (step === null) throw invalidCredentials();
+    // Claim the step atomically, so two concurrent requests cannot both use one code.
+    const claimed = await this.prisma.user.updateMany({
+      where: { id: user.id, OR: [{ totpLastStep: null }, { totpLastStep: { lt: step } }] },
+      data: { totpLastStep: step },
+    });
+    if (claimed.count !== 1) throw invalidCredentials();
+    return this.startSession(user, meta);
+  }
+
+  private async startSession(user: User, meta: ClientMeta): Promise<IssuedSession> {
     const secret = generateToken();
     const now = new Date();
     const session = await this.prisma.session.create({
@@ -192,7 +232,7 @@ export class AuthService {
         userId: user.id,
         tokenHash: hashToken(secret),
         createdAt: now,
-        expiresAt: this.nextExpiry(now, now),
+        expiresAt: this.nextExpiry(now, now, user.role),
         userAgent: meta.userAgent?.slice(0, 512),
         ipAddress: meta.ipAddress?.slice(0, 64),
       },
@@ -218,7 +258,7 @@ export class AuthService {
       !session ||
       session.revokedAt ||
       session.expiresAt <= now ||
-      this.nextExpiry(session.createdAt, now) <= now ||
+      this.nextExpiry(session.createdAt, now, session.user.role) <= now ||
       session.user.status !== 'ACTIVE'
     ) {
       throw sessionInvalid();
@@ -234,7 +274,7 @@ export class AuthService {
     }
 
     const nextSecret = generateToken();
-    const nextExpiresAt = this.nextExpiry(session.createdAt, now);
+    const nextExpiresAt = this.nextExpiry(session.createdAt, now, session.user.role);
     const rotated = await this.prisma.session.updateMany({
       where: { id: session.id, tokenHash: session.tokenHash, revokedAt: null },
       data: {
@@ -357,9 +397,10 @@ export class AuthService {
     return toAuthUser(await this.prisma.user.findUniqueOrThrow({ where: { id: userId } }));
   }
 
-  /** Each use extends a session, but never past SESSION_MAX_DAYS from sign-in. */
-  private nextExpiry(createdAt: Date, now: Date): Date {
-    return new Date(Math.min(now.getTime() + this.refreshTtlMs, createdAt.getTime() + this.sessionMaxMs));
+  /** Each use extends a session, but never past SESSION_MAX_DAYS (ADMIN_SESSION_HOURS for administrators) from sign-in. */
+  private nextExpiry(createdAt: Date, now: Date, role: UserRole): Date {
+    const maxMs = role === 'ADMIN' ? this.adminSessionMaxMs : this.sessionMaxMs;
+    return new Date(Math.min(now.getTime() + this.refreshTtlMs, createdAt.getTime() + maxMs));
   }
 
   private async issue(user: User, sessionId: string, secret: string, expiresAt: Date): Promise<IssuedSession> {

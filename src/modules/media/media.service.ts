@@ -9,7 +9,7 @@ import {
 } from '@bilhanah/contracts';
 import type { Media } from '@bilhanah/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
-import { StorageService } from '../../infrastructure/storage/storage.service.js';
+import { PRIVATE_PREFIX, StorageService } from '../../infrastructure/storage/storage.service.js';
 import { processImage, sniffImageType } from './image-processing.js';
 
 const unsupported = () =>
@@ -61,7 +61,10 @@ export class MediaService {
     }
 
     const id = randomUUID();
-    const storageKey = `restaurants/${restaurant.id}/media/${id}`;
+    const storageKey =
+      kind === 'PAYMENT_PROOF'
+        ? `${PRIVATE_PREFIX}/restaurants/${restaurant.id}/proofs/${id}`
+        : `restaurants/${restaurant.id}/media/${id}`;
     await Promise.all(
       processed.renditions.map((rendition) =>
         this.storage.put(`${storageKey}/${rendition.width}.webp`, rendition.data, 'image/webp'),
@@ -93,7 +96,11 @@ export class MediaService {
     if (!media) throw mediaNotFound();
   }
 
+  /** Public renditions. Private images (payment receipts) have none; read them with readPrivate. */
   toImageSet(media: Pick<Media, 'id' | 'storageKey' | 'width' | 'height' | 'variantWidths'>): ImageSet {
+    if (media.storageKey.startsWith(`${PRIVATE_PREFIX}/`)) {
+      return { id: media.id, width: media.width, height: media.height, sources: [], url: '' };
+    }
     const sources = media.variantWidths.map((width) => ({
       width,
       url: this.storage.publicUrl(`${media.storageKey}/${width}.webp`),
@@ -101,10 +108,22 @@ export class MediaService {
     return { id: media.id, width: media.width, height: media.height, sources, url: sources.at(-1)?.url ?? '' };
   }
 
+  /** The largest rendition of an image, as WebP bytes. */
+  async readImage(media: Pick<Media, 'storageKey' | 'variantWidths'>): Promise<Buffer | null> {
+    const width = media.variantWidths.at(-1);
+    return width === undefined ? null : this.storage.get(`${media.storageKey}/${width}.webp`);
+  }
+
   /** Deletes images no longer used by any restaurant or menu item, once they are older than `olderThan`. */
   async purgeUnused(olderThan: Date): Promise<number> {
     const unused = await this.prisma.media.findMany({
-      where: { createdAt: { lt: olderThan }, logoFor: { none: {} }, coverFor: { none: {} }, menuItems: { none: {} } },
+      where: {
+        createdAt: { lt: olderThan },
+        logoFor: { none: {} },
+        coverFor: { none: {} },
+        menuItems: { none: {} },
+        paymentProofs: { none: {} },
+      },
       select: { id: true, storageKey: true },
       take: 500,
     });

@@ -38,6 +38,10 @@ export const envSchema = z.object({
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(30),
   /** Hard limit on a session's lifetime, however often it is refreshed. */
   SESSION_MAX_DAYS: z.coerce.number().int().min(1).max(365).default(90),
+  /** Administrator sessions end this many hours after sign-in, however often refreshed. */
+  ADMIN_SESSION_HOURS: z.coerce.number().int().min(1).max(72).default(12),
+  /** Encrypts administrators' authenticator secrets. Defaults to a key derived from JWT_ACCESS_SECRET. */
+  DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
   DASHBOARD_URL: z.url(),
   /** Public restaurant address; `{subdomain}` is replaced, e.g. https://{subdomain}.bilhanah.com */
   RESTAURANT_URL_TEMPLATE: z

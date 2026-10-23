@@ -1,28 +1,5 @@
 import type { Language } from '@bilhanah/contracts';
-import type { EmailMessage } from '../../infrastructure/email/mailer.service.js';
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
-}
-
-type Template = { subject: string; greeting: string; body: string; action: string; footer: string };
-
-function render(to: string, language: Language, template: Template, link: string): EmailMessage {
-  const dir = language === 'ar' ? 'rtl' : 'ltr';
-  return {
-    to,
-    subject: template.subject,
-    text: `${template.greeting}\n\n${template.body}\n\n${template.action}: ${link}\n\n${template.footer}`,
-    html: `<!doctype html><html lang="${language}" dir="${dir}"><body style="margin:0;background:#fff8ef;font-family:Arial,sans-serif;color:#242b29">
-<div style="max-width:520px;margin:0 auto;padding:32px 24px">
-<p style="font-size:20px;font-weight:bold;color:#075e54;margin:0 0 24px">Bilhanah · بالهنا</p>
-<p>${escapeHtml(template.greeting)}</p>
-<p style="line-height:1.7">${escapeHtml(template.body)}</p>
-<p style="margin:28px 0"><a href="${escapeHtml(link)}" style="background:#075e54;color:#fff;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:bold">${escapeHtml(template.action)}</a></p>
-<p style="color:#606c65;font-size:13px;line-height:1.6">${escapeHtml(template.footer)}</p>
-</div></body></html>`,
-  };
-}
+import { type EmailTemplate as Template, renderEmail } from '../../infrastructure/email/template.js';
 
 const copy = {
   verify: {
@@ -77,13 +54,13 @@ const copy = {
 
 // Tokens travel in the URL fragment so they never reach server access logs.
 export function verificationEmail(to: string, name: string, language: Language, dashboardUrl: string, token: string) {
-  return render(to, language, copy.verify[language](name), `${dashboardUrl}/verify-email#token=${token}`);
+  return renderEmail(to, language, copy.verify[language](name), `${dashboardUrl}/verify-email#token=${token}`);
 }
 
 export function passwordResetEmail(to: string, name: string, language: Language, dashboardUrl: string, token: string) {
-  return render(to, language, copy.reset[language](name), `${dashboardUrl}/reset-password#token=${token}`);
+  return renderEmail(to, language, copy.reset[language](name), `${dashboardUrl}/reset-password#token=${token}`);
 }
 
 export function existingAccountEmail(to: string, name: string, language: Language, dashboardUrl: string) {
-  return render(to, language, copy.existing[language](name), `${dashboardUrl}/login`);
+  return renderEmail(to, language, copy.existing[language](name), `${dashboardUrl}/login`);
 }

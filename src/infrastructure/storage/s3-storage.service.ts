@@ -1,4 +1,4 @@
-import { DeleteObjectsCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, NoSuchKey, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { assertSafeKey, StorageService } from './storage.service.js';
 
 export type S3StorageOptions = {
@@ -34,6 +34,17 @@ export class S3StorageService extends StorageService {
         CacheControl: 'public, max-age=31536000, immutable',
       }),
     );
+  }
+
+  async get(key: string): Promise<Buffer | null> {
+    assertSafeKey(key);
+    try {
+      const object = await this.client.send(new GetObjectCommand({ Bucket: this.options.bucket, Key: key }));
+      return object.Body ? Buffer.from(await object.Body.transformToByteArray()) : null;
+    } catch (error) {
+      if (error instanceof NoSuchKey) return null;
+      throw error;
+    }
   }
 
   async deletePrefix(prefix: string): Promise<void> {

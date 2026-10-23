@@ -132,10 +132,49 @@ The public menu is cached in Redis under the restaurant's `menuVersion`, which e
 
 Images are stored with `STORAGE_DRIVER=local` (in `var/media`, served at `/media`) or `s3` (Cloudflare R2 in production); see `.env.example`.
 
+## Subscriptions and billing (manual transfer)
+
+Owners pay by InstaPay, Vodafone Cash or bank transfer and send the details for review; an administrator approves (creating a paid period) or rejects them. Schemas: `packages/contracts/src/billing.ts`.
+
+| Route (owner, Bearer) | Result |
+| --- | --- |
+| `GET /billing` | Access, plan prices, billing periods (1/3/6/12 months), payment instructions and the methods that are set up, when a new period would start, the pending payment and history |
+| `POST /billing/payments` `{ planCode, months, method, reference, payerName?, proofId? }` | 201; the amount is computed from the current plan price. 409 `PAYMENT_ALREADY_PENDING` (one at a time), 400 `PAYMENT_METHOD_UNAVAILABLE` |
+| `DELETE /billing/payments/:id` | Withdraw a payment that is still pending |
+| `GET /billing/payments/:id/proof` | The receipt image (`private, no-store`) |
+
+Receipts are uploaded with `POST /media?kind=PAYMENT_PROOF`. They are stored under `private/`, never get public URLs, and are only streamed by the API to their owner and administrators.
+
+A paid period starts when current coverage ends (so paying during the trial keeps the remaining trial days) or immediately when access has lapsed, and runs for whole calendar months. The worker emails owners 7, 3 and 1 days before a trial or paid period ends and once when it has ended, unless another period follows.
+
+## Platform administration
+
+Administrators sign in with `POST /auth/admin/login` `{ email, password, code }`, where `code` comes from an authenticator app (TOTP, RFC 6238). Codes cannot be reused, wrong passwords and wrong codes get the same answer, and administrator sessions end `ADMIN_SESSION_HOURS` (12) after sign-in. Authenticator secrets are stored encrypted (AES-256-GCM, `DATA_ENCRYPTION_KEY`).
+
+Routes under `/admin` require an administrator; every change is written to the audit log in the same transaction.
+
+| Route | Result |
+| --- | --- |
+| `GET /admin/overview` | Restaurants by access status, pending payments, monthly recurring revenue, periods ending within 7 days |
+| `GET /admin/restaurants?query=&access=&page=` | Search by name, subdomain, owner email or phone |
+| `GET /admin/restaurants/:id` | Details, periods and payments |
+| `POST /admin/restaurants/:id/suspend` `{ reason }`, `/unsuspend` | Takes the public menu offline and blocks the owner's edits; data is kept |
+| `POST /admin/restaurants/:id/entitlements` `{ planCode, months, note }` | Grant a paid period by hand (cash, corrections) |
+| `GET /admin/payments?status=PENDING`, `GET /admin/payments/:id`, `/proof` | The review queue (oldest first) and receipts |
+| `POST /admin/payments/:id/approve`, `/reject` `{ reason }` | The owner is emailed either way |
+| `GET /admin/settings`, `PUT /admin/settings/payment`, `PUT /admin/settings/trial`, `PUT /admin/plans/:code` | Payment details shown to owners, trial defaults for new restaurants, plan prices (pending payments keep their amount) |
+| `GET /admin/audit?page=` | Who did what, newest first |
+
 ## Provisioning an administrator
 
 ```bash
 npm run admin:create -- --email admin@bilhanah.com --name "Platform Admin"
 ```
 
-The password (at least 12 characters) is typed at a hidden prompt, or piped as the first line of standard input. It is never passed as an argument, so it does not end up in shell history or process listings. The command refuses to reuse an existing email and never promotes a restaurant owner. Administrator sign-in with two-factor authentication is not implemented yet.
+The password (at least 12 characters) is typed at a hidden prompt, or piped as the first line of standard input. It is never passed as an argument, so it does not end up in shell history or process listings. The command refuses to reuse an existing email and never promotes a restaurant owner.
+
+It prints an authenticator key (and an `otpauth://` link) once; add it to an authenticator app, since sign-in needs a 6-digit code. If an administrator loses their phone, issue a new key, which also signs them out everywhere:
+
+```bash
+npm run admin:reset-mfa -- --email admin@bilhanah.com
+```

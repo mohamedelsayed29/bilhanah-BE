@@ -15,6 +15,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  adminLoginSchema,
   type AuthSession,
   type AuthUser,
   changePasswordSchema,
@@ -100,6 +101,23 @@ export class AuthController {
       ipAddress: request.ip,
       userAgent: request.headers['user-agent'],
     });
+    return this.withRefreshCookie(response, issued);
+  }
+
+  @Post('admin/login')
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(TrustedOriginGuard)
+  @RateLimit(
+    { name: 'admin-login:ip', limit: 20, windowSeconds: HOUR, by: 'ip' },
+    { name: 'admin-login:email', limit: 5, windowSeconds: 15 * 60, by: 'email' },
+  )
+  async adminLogin(
+    @Body(new ZodValidationPipe(adminLoginSchema)) body: z.output<typeof adminLoginSchema>,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<SessionResponse> {
+    const issued = await this.auth.adminLogin(body, { ipAddress: request.ip, userAgent: request.headers['user-agent'] });
     return this.withRefreshCookie(response, issued);
   }
 

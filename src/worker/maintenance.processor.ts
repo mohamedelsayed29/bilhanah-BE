@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Queue, Worker } from 'bullmq';
 import type { Env } from '../config/env.schema.js';
 import { MAINTENANCE_QUEUE, queueConnection } from '../infrastructure/queues/queues.js';
+import { ExpiryRemindersService } from '../modules/billing/expiry-reminders.service.js';
 import { MediaService } from '../modules/media/media.service.js';
 import { MaintenanceService } from './maintenance.service.js';
 
@@ -19,6 +20,7 @@ export class MaintenanceProcessor implements OnApplicationBootstrap, OnApplicati
   constructor(
     private readonly maintenance: MaintenanceService,
     private readonly media: MediaService,
+    private readonly reminders: ExpiryRemindersService,
     private readonly config: ConfigService<Env, true>,
   ) {}
 
@@ -39,6 +41,7 @@ export class MaintenanceProcessor implements OnApplicationBootstrap, OnApplicati
         // Uploads get a day to be attached to an item or the restaurant.
         const images = await this.media.purgeUnused(new Date(Date.now() - 24 * HOUR_MS));
         this.logger.log({ ...result, unusedImages: images }, 'Purged expired records');
+        await this.reminders.sendDue();
       },
       { connection },
     );
