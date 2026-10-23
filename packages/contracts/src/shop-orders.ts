@@ -124,9 +124,15 @@ export const shopSettingsSchema = z.strictObject({
   deliveryFeePiastres: z.number().int().min(0).max(100_000).nullable(),
   cashOnDelivery: z.boolean(),
   onlinePayment: z.boolean(),
-}).refine((settings) => settings.cashOnDelivery || settings.onlinePayment, {
-  message: 'Offer at least one way to pay.',
-  path: ['cashOnDelivery'],
-});
+})
+  .refine((settings) => settings.cashOnDelivery || settings.onlinePayment, {
+    message: 'Offer at least one way to pay.',
+    path: ['cashOnDelivery'],
+  })
+  // Online payment needs a fixed delivery fee, so "online only" without one would leave no way to pay.
+  .refine((settings) => settings.cashOnDelivery || settings.deliveryFeePiastres !== null, {
+    message: 'Set a delivery fee, or keep cash on delivery.',
+    path: ['deliveryFeePiastres'],
+  });
 
 export const standOrderIdParamSchema = z.uuid();

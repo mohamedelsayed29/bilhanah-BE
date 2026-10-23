@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PAYMENT_STATUSES } from './billing.js';
 import type { OwnerPayment, PaymentInstructions } from './billing.js';
 import { emailSchema } from './common.js';
 import { type AccessStatus, PLAN_CODES, type PlanCode, type RestaurantAccess } from './plans.js';
@@ -27,7 +28,7 @@ export const adminRestaurantsQuerySchema = z.object({
 });
 
 export const adminPaymentsQuerySchema = z.object({
-  status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED']).optional(),
+  status: z.enum(PAYMENT_STATUSES).optional(),
   page: z.coerce.number().int().min(1).max(10_000).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });

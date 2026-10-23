@@ -73,6 +73,8 @@ describe('the shop checkout', () => {
     });
     expect((await http().get('/v1/public/shop').expect(200)).body).toMatchObject({ deliveryFeePiastres: 7500, paymentMethods: ['CASH_ON_DELIVERY', 'PAYMOB'] });
     await setShop(admin, { deliveryFeePiastres: 7500, cashOnDelivery: false, onlinePayment: false }).expect(400);
+    // Online only needs a fixed fee, or nobody could pay.
+    await setShop(admin, { deliveryFeePiastres: null, cashOnDelivery: false, onlinePayment: true }).expect(400);
     await setShop(admin, { deliveryFeePiastres: 7500, cashOnDelivery: false, onlinePayment: true }).expect(200);
     expect((await http().get('/v1/public/shop').expect(200)).body.paymentMethods).toEqual(['PAYMOB']);
     expect(await t.prisma.auditLog.count({ where: { action: 'settings.shop' } })).toBe(2);
