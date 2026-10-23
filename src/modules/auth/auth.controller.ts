@@ -7,6 +7,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Req,
   Res,
@@ -22,6 +23,7 @@ import {
   registerOwnerSchema,
   resetPasswordSchema,
   sessionIdParamSchema,
+  updateProfileSchema,
   type SessionResponse,
   verifyEmailSchema,
   type VerifyEmailResponse,
@@ -141,6 +143,15 @@ export class AuthController {
   @UseGuards(AccessTokenGuard)
   me(@CurrentAuth() auth: AuthContext): Promise<AuthUser> {
     return this.auth.me(auth.userId);
+  }
+
+  @Patch('me')
+  @UseGuards(AccessTokenGuard)
+  updateProfile(
+    @CurrentAuth() auth: AuthContext,
+    @Body(new ZodValidationPipe(updateProfileSchema)) body: z.output<typeof updateProfileSchema>,
+  ): Promise<AuthUser> {
+    return this.auth.updateProfile(auth.userId, body);
   }
 
   @Get('sessions')

@@ -65,6 +65,7 @@ All routes are under `/v1/auth`. Request bodies are validated by the schemas in 
 | `POST /forgot-password` | 202 always |
 | `POST /reset-password` `{ token, password }` | 204; signs out every session |
 | `GET /me` | Current user (requires `Authorization: Bearer`) |
+| `PATCH /me` `{ fullName?, preferredLanguage? }` | Updates the caller's name and email language (Bearer) |
 | `GET /sessions` | Active sessions of the caller, with `current` marking this one (Bearer) |
 | `DELETE /sessions/:id` | 204; signs out one of the caller's sessions, 404 for any other ID (Bearer) |
 | `POST /change-password` `{ currentPassword, newPassword }` | 204; signs out every other session and voids reset links. 400 `INVALID_CREDENTIALS` for a wrong current password (Bearer) |

@@ -392,3 +392,25 @@ describe('account security', () => {
     await http().post('/v1/auth/change-password').send({ currentPassword: PASSWORD, newPassword: NEW_PASSWORD }).expect(401);
   });
 });
+
+describe('profile', () => {
+  it('updates the name and email language', async () => {
+    await registerAndVerify();
+    const token = (await login().expect(200)).body.accessToken;
+
+    const updated = await http()
+      .patch('/v1/auth/me')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ fullName: '  Hassan Ali ', preferredLanguage: 'en' })
+      .expect(200);
+    expect(updated.body).toMatchObject({ fullName: 'Hassan Ali', preferredLanguage: 'en', email: EMAIL });
+
+    await http().post('/v1/auth/forgot-password').send({ email: EMAIL }).expect(202);
+    expect(t.mailer.lastTo(EMAIL)?.subject).toBe('Reset your Bilhanah password');
+
+    // Email and role are not editable here.
+    await http().patch('/v1/auth/me').set('Authorization', `Bearer ${token}`).send({ email: 'x@y.test' }).expect(400);
+    await http().patch('/v1/auth/me').set('Authorization', `Bearer ${token}`).send({ role: 'ADMIN' }).expect(400);
+    await http().patch('/v1/auth/me').send({ fullName: 'Nope' }).expect(401);
+  });
+});

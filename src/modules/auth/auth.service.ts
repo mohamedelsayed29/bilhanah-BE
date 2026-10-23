@@ -12,6 +12,7 @@ import {
   type AuthSession,
   type AuthUser,
   type changePasswordSchema,
+  type updateProfileSchema,
   COMMON_ERROR_CODES,
   type loginSchema,
   type registerOwnerSchema,
@@ -346,6 +347,10 @@ export class AuthService {
       // Outstanding reset links would otherwise still set a password.
       this.prisma.passwordResetToken.deleteMany({ where: { userId: user.id, usedAt: null } }),
     ]);
+  }
+
+  async updateProfile(userId: string, input: z.output<typeof updateProfileSchema>): Promise<AuthUser> {
+    return toAuthUser(await this.prisma.user.update({ where: { id: userId }, data: input }));
   }
 
   async me(userId: string): Promise<AuthUser> {
