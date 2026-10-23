@@ -34,6 +34,10 @@ Object.assign(process.env, {
   SMTP_PORT: '1025',
   SMTP_SECURE: 'false',
   MAIL_FROM: 'Bilhanah <no-reply@bilhanah.test>',
+  // A key pair for tests only; nothing is sent to real push services.
+  VAPID_PUBLIC_KEY: 'BAfI8Tl9_-bPlhQIo7Mgxk1GQSgEAaDVUqTTI9kCxL0juiQEsndj7EWoYK9lUcOd0HiOiMD9zET1D5Yx2doIdww',
+  VAPID_PRIVATE_KEY: 'W9y_cQ21fMIS6IClYdCWrANBKzgEm2SuG_yxCSXzxV8',
+  VAPID_SUBJECT: 'mailto:ops@bilhanah.test',
 });
 
 export default defineConfig({

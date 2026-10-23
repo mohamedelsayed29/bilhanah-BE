@@ -37,6 +37,11 @@ if [[ ! -f .env ]]; then
       -e "s|^RESTAURANT_URL_TEMPLATE=.*|RESTAURANT_URL_TEMPLATE=http://{subdomain}.localhost:$WEB_PORT|" \
       .env.example > .env
 fi
+# Web Push keys for order-ready alerts; older .env files get them too.
+if ! grep -q '^VAPID_PUBLIC_KEY=' .env; then
+  step "Adding Web Push keys to .env"
+  { printf '\n# Web Push (order-ready alerts). Keep them: new keys orphan existing subscriptions.\n'; node scripts/generate-vapid-keys.mjs; } >> .env
+fi
 API_PORT="$(sed -n 's/^PORT=//p' .env | tail -1)"
 API_PORT="${API_PORT:-3000}"
 

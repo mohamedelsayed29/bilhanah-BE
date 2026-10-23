@@ -1,4 +1,7 @@
 import { createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
+import type { FactoryProvider } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import type { Env } from '../../config/env.schema.js';
 
 /**
  * Order tracking links: "<order id>.<signature>". Derived rather than stored,
@@ -33,3 +36,11 @@ export class TrackingTokens {
     return createHmac('sha256', this.key).update(orderId).digest().subarray(0, 18).toString('base64url');
   }
 }
+
+/** The API (tracking pages) and the worker (links in notifications) sign with the same key. */
+export const trackingTokensProvider: FactoryProvider<TrackingTokens> = {
+  provide: TrackingTokens,
+  inject: [ConfigService],
+  useFactory: (config: ConfigService<Env, true>) =>
+    new TrackingTokens(config.get('DATA_ENCRYPTION_KEY', { infer: true }) ?? config.get('JWT_ACCESS_SECRET', { infer: true })),
+};

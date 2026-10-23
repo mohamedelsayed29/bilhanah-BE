@@ -201,6 +201,22 @@ Order numbers restart at #1 each day in the restaurant's time zone. Tracking tok
 
 **Live updates** use Socket.IO at path `/v1/realtime`, WebSocket transport only (no sticky sessions needed behind the load balancer; a Redis adapter relays events between API replicas). Namespace `/owner` with `auth: { token: <access token> }` receives `order.created`, `order.updated` and `restaurant.updated` (ordering settings changed, e.g. paused on another device) for the owner's restaurant and is disconnected when the token expires (reconnect with a fresh one). Namespace `/track` with `auth: { token: <tracking token> }` receives `order.updated` for that order. Clients should also refetch on reconnect.
 
+## Order-ready alerts (Full Experience plan)
+
+On the Full Experience plan, the tracking page rings and vibrates when the order is ready, and diners can turn on Web Push to hear about it with the page closed (on iPhone, after adding the menu to the Home Screen). Schemas: `packages/contracts/src/push.ts` and `pushSubscriptionSchema` in `orders.ts`.
+
+| Route | Result |
+| --- | --- |
+| `GET /public/orders/:trackingToken/alerts` | `{ readyAlerts, push }`: whether the page may ring (the plan), and `push.publicKey` (VAPID) when push is available |
+| `POST /public/orders/:trackingToken/push` `PushSubscription.toJSON() + { language }` | 204. Only browser push services (`PUSH_SERVICE_HOSTS`: FCM, Mozilla, Apple, Windows), so diners cannot make the server call other hosts. Five browsers per order (the oldest makes room). 409 `PUSH_UNAVAILABLE` with `details.reason` `PLAN`, `NOT_CONFIGURED` or `ORDER_FINISHED` (ready or closed) |
+| `DELETE /public/orders/:trackingToken/push` `{ endpoint }` | 204, also when already gone |
+| `GET /public/restaurants/:subdomain/manifest.webmanifest?start=/order/:trackingToken` | A web app manifest for the restaurant's site; `start` makes an install open that order |
+| `GET /public/restaurants/:subdomain/icon-{180,192,512}.png` | The logo (or the Bilhanah mark) centred on white, inside the maskable safe zone; cached in Redis per logo |
+
+When an order becomes READY, REJECTED or CANCELLED, the API queues one job per subscribed browser (`push` queue, job id `{subscription}_{status}` so a status is never sent twice). The worker writes the notification in the diner's language, links the tracking page, and sends it with a 1-hour TTL and the order as the topic (a newer update replaces an undelivered older one). Push services answering 403/404/410 mean the subscription is dead and it is deleted; 400/413 are dropped; anything else is retried with backoff. Owners see a bell on orders whose diner turned notifications on (`OwnerOrder.notifiesDiner`, live over `order.updated`). Subscriptions are deleted an hour after their order is finished, and after two days at most.
+
+Push needs `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` (`npm run vapid:generate`; `npm run dev` adds a pair to `.env`). Without them the tracking page still rings while open.
+
 ## Subscriptions and billing (manual transfer)
 
 Owners pay by InstaPay, Vodafone Cash or bank transfer and send the details for review; an administrator approves (creating a paid period) or rejects them. Schemas: `packages/contracts/src/billing.ts`.

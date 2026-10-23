@@ -71,6 +71,16 @@ export const envSchema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASSWORD: z.string().optional(),
   MAIL_FROM: z.string().min(3),
+
+  /**
+   * Web Push (order-ready alerts). Generate the pair once with
+   * `npm run vapid:generate` and keep it: changing it orphans every diner's
+   * subscription. Without it, push is off and the tracking page only rings.
+   */
+  VAPID_PUBLIC_KEY: z.string().regex(/^[A-Za-z0-9_-]{87}$/, 'An uncompressed P-256 public key, base64url (87 characters).').optional(),
+  VAPID_PRIVATE_KEY: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'A P-256 private key, base64url (43 characters).').optional(),
+  /** Push services contact this if our messages misbehave: mailto: or https: */
+  VAPID_SUBJECT: z.string().regex(/^(mailto:|https:\/\/)/).default('mailto:hello@bilhanah.com'),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -79,6 +89,10 @@ const envSchemaChecked = envSchema
   .refine((env) => env.SESSION_MAX_DAYS >= env.REFRESH_TOKEN_TTL_DAYS, {
     message: 'SESSION_MAX_DAYS must be at least REFRESH_TOKEN_TTL_DAYS.',
     path: ['SESSION_MAX_DAYS'],
+  })
+  .refine((env) => !env.VAPID_PUBLIC_KEY === !env.VAPID_PRIVATE_KEY, {
+    message: 'Set both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY, or neither.',
+    path: ['VAPID_PRIVATE_KEY'],
   })
   .superRefine((env, context) => {
     if (env.STORAGE_DRIVER !== 's3') return;

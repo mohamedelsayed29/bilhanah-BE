@@ -6,12 +6,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const ENDED_SESSION_RETENTION_DAYS = 30;
 /** Accounts never confirmed within this many days are removed, freeing the email. */
 const UNVERIFIED_ACCOUNT_DAYS = 30;
+/** A diner's push subscription outlives its finished order this long (in case of a late correction), and any order two days. */
+const FINISHED_ORDER_PUSH_MS = 60 * 60 * 1000;
+const PUSH_SUBSCRIPTION_MAX_DAYS = 2;
 
 export type PurgeResult = {
   sessions: number;
   verificationTokens: number;
   resetTokens: number;
   unverifiedAccounts: number;
+  pushSubscriptions: number;
 };
 
 @Injectable()
@@ -23,8 +27,10 @@ export class MaintenanceService {
     const sessionCutoff = new Date(now.getTime() - ENDED_SESSION_RETENTION_DAYS * DAY_MS);
     const unverifiedCutoff = new Date(now.getTime() - UNVERIFIED_ACCOUNT_DAYS * DAY_MS);
     const spentToken = { OR: [{ expiresAt: { lte: now } }, { usedAt: { not: null } }] };
+    const finishedCutoff = new Date(now.getTime() - FINISHED_ORDER_PUSH_MS);
+    const pushCutoff = new Date(now.getTime() - PUSH_SUBSCRIPTION_MAX_DAYS * DAY_MS);
 
-    const [sessions, verificationTokens, resetTokens, unverifiedAccounts] = await this.prisma.$transaction([
+    const [sessions, verificationTokens, resetTokens, unverifiedAccounts, pushSubscriptions] = await this.prisma.$transaction([
       this.prisma.session.deleteMany({
         where: { OR: [{ expiresAt: { lte: sessionCutoff } }, { revokedAt: { lte: sessionCutoff } }] },
       }),
@@ -34,12 +40,21 @@ export class MaintenanceService {
       this.prisma.user.deleteMany({
         where: { role: 'OWNER', emailVerifiedAt: null, createdAt: { lte: unverifiedCutoff } },
       }),
+      this.prisma.pushSubscription.deleteMany({
+        where: {
+          OR: [
+            { createdAt: { lte: pushCutoff } },
+            { order: { status: { in: ['COMPLETED', 'REJECTED', 'CANCELLED'] }, updatedAt: { lte: finishedCutoff } } },
+          ],
+        },
+      }),
     ]);
     return {
       sessions: sessions.count,
       verificationTokens: verificationTokens.count,
       resetTokens: resetTokens.count,
       unverifiedAccounts: unverifiedAccounts.count,
+      pushSubscriptions: pushSubscriptions.count,
     };
   }
 }

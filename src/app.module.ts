@@ -7,6 +7,7 @@ import { DatabaseModule } from './infrastructure/database/database.module.js';
 import { EmailModule } from './infrastructure/email/email.module.js';
 import { AppLoggerModule } from './infrastructure/observability/logger.module.js';
 import { ObservabilityModule } from './infrastructure/observability/observability.module.js';
+import { PushModule } from './infrastructure/push/push.module.js';
 import { QueuesModule } from './infrastructure/queues/queues.module.js';
 import { RedisModule } from './infrastructure/redis/redis.module.js';
 import { StorageModule } from './infrastructure/storage/storage.module.js';
@@ -17,6 +18,7 @@ import { ContactModule } from './modules/contact/contact.module.js';
 import { MediaModule } from './modules/media/media.module.js';
 import { MenusModule } from './modules/menus/menus.module.js';
 import { OrdersModule } from './modules/orders/orders.module.js';
+import { PwaModule } from './modules/pwa/pwa.module.js';
 import { PlansModule } from './modules/plans/plans.module.js';
 import { RestaurantsModule } from './modules/restaurants/restaurants.module.js';
 import { TablesModule } from './modules/tables/tables.module.js';
@@ -29,6 +31,7 @@ import { TablesModule } from './modules/tables/tables.module.js';
     DatabaseModule,
     RedisModule,
     QueuesModule,
+    PushModule,
     StorageModule,
     EmailModule,
     ObservabilityModule,
@@ -42,6 +45,7 @@ import { TablesModule } from './modules/tables/tables.module.js';
     AdminModule,
     TablesModule,
     OrdersModule,
+    PwaModule,
   ],
   providers: [{ provide: APP_FILTER, useClass: AllExceptionsFilter }],
 })

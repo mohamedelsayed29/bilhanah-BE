@@ -25,11 +25,13 @@ import { RealtimeService } from '../realtime/realtime.service.js';
 import { hasAccess } from '../subscriptions/access.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
 import { businessDay } from './business-day.js';
+import { OrderAlertsService } from './order-alerts.service.js';
 import { TrackingTokens } from './tracking-token.js';
 
 const orderInclude = {
   items: { orderBy: { sortOrder: 'asc' } },
   restaurant: { select: { name: true, subdomain: true, phone: true, brandColor: true, logo: true } },
+  _count: { select: { pushSubscriptions: true } },
 } satisfies Prisma.OrderInclude;
 
 type OrderRow = Prisma.OrderGetPayload<{ include: typeof orderInclude }>;
@@ -59,6 +61,7 @@ export class OrdersService {
     private readonly media: MediaService,
     private readonly realtime: RealtimeService,
     private readonly trackingTokens: TrackingTokens,
+    private readonly alerts: OrderAlertsService,
   ) {}
 
   // --- Diners --------------------------------------------------------------
@@ -220,7 +223,14 @@ export class OrdersService {
     const order = await this.prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: orderInclude });
     const ownerView = this.toOwnerOrder(order);
     this.realtime.emitOrderUpdated(restaurantId, ownerView, this.toPublicOrder(order));
+    await this.alerts.queueStatus(orderId, input.status);
     return ownerView;
+  }
+
+  /** Something about the order changed without a status change (a diner turned alerts on or off): bump it and tell the board. */
+  async touch(orderId: string): Promise<void> {
+    const order = await this.prisma.order.update({ where: { id: orderId }, data: { updatedAt: new Date() }, include: orderInclude });
+    this.realtime.emitOrderUpdated(order.restaurantId, this.toOwnerOrder(order), this.toPublicOrder(order));
   }
 
   // --- Helpers -------------------------------------------------------------
@@ -312,7 +322,7 @@ export class OrdersService {
   }
 
   private toOwnerOrder(order: OrderRow): OwnerOrder {
-    return { id: order.id, customerPhone: order.customerPhone, ...this.core(order) };
+    return { id: order.id, customerPhone: order.customerPhone, notifiesDiner: order._count.pushSubscriptions > 0, ...this.core(order) };
   }
 
   private toPublicOrder(order: OrderRow): PublicOrder {

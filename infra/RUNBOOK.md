@@ -49,9 +49,10 @@ Create an API token with **Zone → DNS → Edit** for the zone. Caddy uses it t
 cp infra/.env.prod.example infra/.env.prod && chmod 600 infra/.env.prod
 openssl rand -hex 32   # JWT_ACCESS_SECRET
 openssl rand -hex 24   # POSTGRES_PASSWORD (hex keeps it URL-safe)
+docker run --rm -v "$PWD/scripts:/s:ro" node:24-slim node /s/generate-vapid-keys.mjs   # VAPID_* (Web Push)
 ```
 
-Fill in every value. Secrets are generated fresh for production, never copied from development. `DATA_ENCRYPTION_KEY` must never change after the first administrator is created. Email needs a transactional provider (Resend, Postmark or Amazon SES) with SPF/DKIM set up for the sending domain.
+Fill in every value. Secrets are generated fresh for production, never copied from development. `DATA_ENCRYPTION_KEY` must never change after the first administrator is created, and the VAPID pair must never change once diners have turned on notifications. Email needs a transactional provider (Resend, Postmark or Amazon SES) with SPF/DKIM set up for the sending domain.
 
 ## 4. Deploy (first time and every release)
 

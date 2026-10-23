@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Header, Headers, HttpCode, HttpStatus, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Headers, HttpCode, HttpStatus, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import {
   idempotencyKeySchema,
+  type OrderAlerts,
   orderIdParamSchema,
   ordersQuerySchema,
   type OwnerOrder,
@@ -8,6 +9,8 @@ import {
   placeOrderSchema,
   type PlaceOrderResponse,
   type PublicOrder,
+  pushSubscriptionSchema,
+  pushUnsubscribeSchema,
   updateOrderStatusSchema,
 } from '@bilhanah/contracts';
 import type { z } from 'zod';
@@ -16,6 +19,7 @@ import { AccessTokenGuard } from '../../common/guards/access-token.guard.js';
 import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard.js';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
+import { OrderAlertsService } from './order-alerts.service.js';
 import { OrdersService } from './orders.service.js';
 
 /** The restaurant's orders: the live board, history, and status changes. */
@@ -54,7 +58,10 @@ const idempotencyKeyPipe = new ZodValidationPipe(idempotencyKeySchema);
 @Controller('public')
 @UseGuards(RateLimitGuard)
 export class PublicOrdersController {
-  constructor(private readonly orders: OrdersService) {}
+  constructor(
+    private readonly orders: OrdersService,
+    private readonly alerts: OrderAlertsService,
+  ) {}
 
   @Post('restaurants/:subdomain/orders')
   @HttpCode(HttpStatus.CREATED)
@@ -81,5 +88,35 @@ export class PublicOrdersController {
   // Malformed tokens are simply unknown orders (404), like forged ones.
   track(@Param('token') token: string): Promise<PublicOrder> {
     return this.orders.track(token);
+  }
+
+  /** Whether the tracking page rings when the order is ready, and the key to subscribe to push with. */
+  @Get('orders/:token/alerts')
+  @Header('Cache-Control', 'no-store')
+  @RateLimit({ name: 'order-alerts:ip', limit: 300, windowSeconds: 60, by: 'ip' })
+  orderAlerts(@Param('token') token: string): Promise<OrderAlerts> {
+    return this.alerts.alerts(token);
+  }
+
+  @Post('orders/:token/push')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RateLimit({ name: 'push-subscribe:ip', limit: 60, windowSeconds: 10 * 60, by: 'ip' })
+  async subscribe(
+    @Param('token') token: string,
+    @Body(new ZodValidationPipe(pushSubscriptionSchema)) body: z.output<typeof pushSubscriptionSchema>,
+  ): Promise<void> {
+    const changed = await this.alerts.subscribe(token, body);
+    if (changed) await this.orders.touch(changed);
+  }
+
+  @Delete('orders/:token/push')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RateLimit({ name: 'push-unsubscribe:ip', limit: 60, windowSeconds: 10 * 60, by: 'ip' })
+  async unsubscribe(
+    @Param('token') token: string,
+    @Body(new ZodValidationPipe(pushUnsubscribeSchema)) body: z.output<typeof pushUnsubscribeSchema>,
+  ): Promise<void> {
+    const changed = await this.alerts.unsubscribe(token, body.endpoint);
+    if (changed) await this.orders.touch(changed);
   }
 }

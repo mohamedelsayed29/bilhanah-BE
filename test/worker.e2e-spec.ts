@@ -94,7 +94,7 @@ describe('maintenance', () => {
 
     const result = await new MaintenanceService(t.prisma).purgeExpired(now);
 
-    expect(result).toEqual({ sessions: 2, verificationTokens: 1, resetTokens: 2, unverifiedAccounts: 1 });
+    expect(result).toEqual({ sessions: 2, verificationTokens: 1, resetTokens: 2, unverifiedAccounts: 1, pushSubscriptions: 0 });
     expect((await t.prisma.session.findMany()).map((s) => s.id).sort()).toEqual([active.id, recentlyRevoked.id].sort());
     expect((await t.prisma.passwordResetToken.findMany()).map((r) => r.id)).toEqual([usable.id]);
     expect((await t.prisma.user.findMany({ orderBy: { email: 'asc' } })).map((u) => u.email)).toEqual([

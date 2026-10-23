@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import type { ImageSet } from './media.js';
+import { languageSchema } from './common.js';
+import { isPushServiceEndpoint } from './push.js';
 import type { OrderingSettings } from './restaurants.js';
 
 export const ORDER_TYPES = ['DINE_IN', 'PICKUP'] as const;
@@ -143,7 +145,12 @@ type OrderCore = {
 };
 
 /** An order as the restaurant sees it. */
-export type OwnerOrder = OrderCore & { id: string; customerPhone: string | null };
+export type OwnerOrder = OrderCore & {
+  id: string;
+  customerPhone: string | null;
+  /** The diner turned on Web Push for this order, so they hear when it is ready. */
+  notifiesDiner: boolean;
+};
 
 /** An order as the diner sees it on the tracking page. */
 export type PublicOrder = OrderCore & {
@@ -151,6 +158,30 @@ export type PublicOrder = OrderCore & {
 };
 
 export type PlaceOrderResponse = { trackingToken: string; order: PublicOrder };
+
+// --- Ready alerts -------------------------------------------------------------
+
+const base64url = /^[A-Za-z0-9_-]+={0,2}$/;
+
+/**
+ * POST /v1/public/orders/:token/push. The browser's PushSubscription.toJSON(),
+ * plus the language to write the notification in. Other fields are ignored.
+ */
+export const pushSubscriptionSchema = z.object({
+  endpoint: z
+    .url({ protocol: /^https$/ })
+    .max(2048)
+    .refine(isPushServiceEndpoint, { message: 'Not a browser push service.' }),
+  expirationTime: z.number().nullable().optional(),
+  keys: z.object({
+    p256dh: z.string().regex(base64url).min(80).max(100),
+    auth: z.string().regex(base64url).min(16).max(32),
+  }),
+  language: languageSchema.default('ar'),
+});
+
+/** DELETE /v1/public/orders/:token/push */
+export const pushUnsubscribeSchema = z.object({ endpoint: z.string().max(2048) });
 
 // --- Tables -----------------------------------------------------------------
 

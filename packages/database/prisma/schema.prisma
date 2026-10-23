@@ -500,9 +500,10 @@ model Order {
   closedAt         DateTime?   @map("closed_at") @db.Timestamptz(3)
   updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  restaurant Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  table      Table?      @relation(fields: [tableId], references: [id], onDelete: SetNull)
-  items      OrderItem[]
+  restaurant        Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  table             Table?             @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  items             OrderItem[]
+  pushSubscriptions PushSubscription[]
 
   @@unique([restaurantId, idempotencyKey])
   @@unique([restaurantId, businessDay, number])
@@ -542,4 +543,24 @@ model OrderCounter {
 
   @@id([restaurantId, businessDay])
   @@map("order_counters")
+}
+
+/// A diner's browser asking to hear about one order (Web Push). Deleted once
+/// the order is finished, or when the push service says it is gone.
+model PushSubscription {
+  id        String   @id @default(uuid()) @db.Uuid
+  orderId   String   @map("order_id") @db.Uuid
+  endpoint  String   @db.VarChar(2048)
+  /// The browser's keys for encrypting messages (base64url).
+  p256dh    String   @db.VarChar(100)
+  auth      String   @db.VarChar(32)
+  /// Notifications are written in the language the diner's page used.
+  language  Language @default(ar)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, endpoint])
+  @@index([createdAt])
+  @@map("push_subscriptions")
 }
