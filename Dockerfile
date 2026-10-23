@@ -49,6 +49,9 @@ COPY --from=build /app/packages/database/package.json packages/database/
 COPY --from=build /app/packages/database/dist packages/database/dist
 COPY --from=build /app/apps/api/package.json apps/api/
 COPY --from=build /app/apps/api/dist apps/api/dist
+# Mount point for STORAGE_DRIVER=local. A new named volume takes this ownership,
+# so the unprivileged user can write uploads.
+RUN mkdir -p /data/media && chown node:node /data/media
 WORKDIR /app/apps/api
 USER node
 EXPOSE 3000
