@@ -258,7 +258,7 @@ export class ShopService {
     });
     if (claimed.count !== 1) return;
     await this.prisma.standOrderEvent.create({
-      data: { orderId, status: 'NEW', note: revived ? 'Paid online after it was cancelled for non-payment.' : 'Paid online.' },
+      data: { orderId, status: 'NEW', note: revived ? 'اتدفع أونلاين بعد ما اتلغى لعدم الدفع · Paid online after it was cancelled for non-payment.' : 'اتدفع أونلاين · Paid online.' },
     });
     await this.announce(await this.prisma.standOrder.findUniqueOrThrow({ where: { id: orderId }, include: standOrderInclude }));
   }

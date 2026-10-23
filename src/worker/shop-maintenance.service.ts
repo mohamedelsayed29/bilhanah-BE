@@ -36,7 +36,7 @@ export class ShopMaintenanceService {
     for (const { id } of unpaid) {
       const cancelled = await this.prisma.standOrder.updateMany({ where: { id, status: 'AWAITING_PAYMENT' }, data: { status: 'CANCELLED' } });
       if (!cancelled.count) continue;
-      await this.prisma.standOrderEvent.create({ data: { orderId: id, status: 'CANCELLED', note: 'Not paid within two days.' } });
+      await this.prisma.standOrderEvent.create({ data: { orderId: id, status: 'CANCELLED', note: 'ما اتدفعش خلال يومين · Not paid within two days.' } });
       unpaidStandOrders += 1;
     }
 
