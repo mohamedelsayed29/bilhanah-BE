@@ -26,13 +26,17 @@ bilhanah/
 
 ## Run it locally
 
-Requirements: Node.js 24+ and Docker (Docker Desktop with its engine running).
+Requirements: git, Node.js 24+ and Docker (Docker Desktop with its engine running). Linux and macOS; on Windows, use WSL.
 
 ```bash
-npm run dev          # or: bash scripts/dev.sh
+git clone https://github.com/mohamedelsayed29/bilhanah-BE
+cd bilhanah-BE
+bash run.sh            # first run: clones the website and dashboard next to this repository
+bash run.sh --demo     # also creates the demo restaurant
+bash run.sh --update   # pulls the latest main in all three repositories first
 ```
 
-The script creates `.env` on first run, installs dependencies, starts PostgreSQL, Redis and Mailpit in Docker, applies migrations, then runs the API and the worker, and also the website and the dashboard when their repositories are cloned next to this one. Ctrl+C stops the apps; `npm run services:down` stops the Docker services.
+`run.sh` clones the other two repositories if they are missing, then runs `scripts/dev.sh` (also `npm run dev`). That creates `.env` on first run, installs dependencies, starts PostgreSQL, Redis and Mailpit in Docker, applies migrations, and runs the API, the worker, the website and the dashboard together. Ctrl+C stops the apps; `npm run services:down` stops the Docker services.
 
 | | |
 | --- | --- |
@@ -42,7 +46,7 @@ The script creates `.env` on first run, installs dependencies, starts PostgreSQL
 | API | http://127.0.0.1:3000 (`/health/ready`) |
 | Email sent by the app (Mailpit) | http://127.0.0.1:8025 |
 
-Use `WEB_PORT=…` to run the website on another port. With the stack running, `npm run seed:demo` creates a demo restaurant with a full menu and photos at http://koshary-demo.localhost:5180 (owner `demo-owner@bilhanah.local` / `demo-password-1`).
+Use `WEB_PORT=…` to run the website on another port. With the stack running, `npm run seed:demo` (or `bash run.sh --demo`) creates a demo restaurant with a full menu and photos at http://koshary-demo.localhost:5180 (owner `demo-owner@bilhanah.local` / `demo-password-1`).
 
 | Command | Purpose |
 | --- | --- |

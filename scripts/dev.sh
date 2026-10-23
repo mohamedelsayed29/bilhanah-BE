@@ -40,10 +40,17 @@ fi
 API_PORT="$(sed -n 's/^PORT=//p' .env | tail -1)"
 API_PORT="${API_PORT:-3000}"
 
-port_in_use() { ss -ltnH "sport = :$1" 2>/dev/null | grep -q .; }
+# The process listening on a port, if any (ss on Linux, lsof on macOS).
+port_holder() {
+  if command -v ss >/dev/null; then
+    ss -ltnpH "sport = :$1" 2>/dev/null | grep -q . || return 1
+    ss -ltnpH "sport = :$1" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2
+  else
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1 | grep . || return 1
+  fi
+}
 for port in "$API_PORT" "$WEB_PORT" "$DASHBOARD_PORT"; do
-  if port_in_use "$port"; then
-    holder="$(ss -ltnpH "sport = :$port" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)"
+  if holder="$(port_holder "$port")"; then
     detail=""
     [[ -n "$holder" ]] && detail=" by: $(ps -o args= -p "$holder" | cut -c1-120)"
     fail "Port $port is already in use$detail. Stop it, or choose another port (WEB_PORT=... or PORT in .env)."
@@ -92,10 +99,14 @@ trap 'cleanup; exit 130' INT TERM
 trap cleanup EXIT
 
 # Each app runs in its own process group so the whole tree (npm, nest --watch,
-# node) stops together. Output is prefixed with the app's name.
+# node) stops together: setsid on Linux, job control where it is missing (macOS).
+# Output is prefixed with the app's name.
+command -v setsid >/dev/null || set -m
 start() {
   local name="$1" color="$2" command="$3"
-  setsid bash -c "$command 2>&1 | sed -u 's/^/$color[$name]$reset /'" &
+  # A shell loop, not sed or awk: those buffer piped input on some systems.
+  local run=(bash -c "$command 2>&1 | while IFS= read -r line || [[ -n \$line ]]; do printf '%s\n' \"$color[$name]$reset \$line\"; done")
+  if command -v setsid >/dev/null; then setsid "${run[@]}" & else "${run[@]}" & fi
   pids+=("$!")
 }
 
