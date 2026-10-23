@@ -13,13 +13,18 @@ targets=("$@")
 source_commit="$(git -C "$ROOT" rev-parse --short HEAD)"
 [[ -z "$(git -C "$ROOT" status --porcelain -- packages/contracts packages/config)" ]] || source_commit="$source_commit + uncommitted changes"
 
+# Updates the copy in place: built output (dist) and node_modules are never deleted, so a running
+# dev server keeps resolving the package while files change.
 copy() {
-  local from="$1" to="$2"
-  rm -rf "$to"
+  local from="$1" to="$2" files
   mkdir -p "$to"
-  (cd "$from" && git ls-files --cached --others --exclude-standard -- . | while read -r file; do
-    mkdir -p "$to/$(dirname "$file")" && cp "$file" "$to/$file"
-  done)
+  files="$(cd "$from" && git ls-files --cached --others --exclude-standard -- .)"
+  (cd "$to" && find . -type f -not -path './dist/*' -not -path './node_modules/*' | sed 's|^\./||') | while read -r file; do
+    grep -qxF "$file" <<<"$files" || rm -f "$to/$file"
+  done
+  while read -r file; do
+    mkdir -p "$to/$(dirname "$file")" && cp "$from/$file" "$to/$file"
+  done <<<"$files"
 }
 
 for target in "${targets[@]}"; do
@@ -35,5 +40,7 @@ and commit the result here.
 
 Copied from bilhanah-BE at $source_commit.
 NOTE
+  # Rebuild there too, so the app sees the change immediately.
+  if [[ -d "$target/node_modules" ]]; then (cd "$target" && npm run --silent build -w @bilhanah/contracts); fi
   echo "Synced contracts into $target"
 done
