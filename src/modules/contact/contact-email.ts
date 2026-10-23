@@ -8,6 +8,7 @@ const escapeHtml = (value: string) =>
 export function contactEmail(inbox: string, message: z.output<typeof contactMessageSchema>): EmailMessage {
   const lines = [
     `From: ${message.name} <${message.email}>`,
+    ...(message.restaurant ? [`Restaurant: ${message.restaurant}`] : []),
     ...(message.phone ? [`Phone: ${message.phone}`] : []),
     `Topic: ${message.topic}`,
     '',
