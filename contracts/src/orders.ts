@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ImageSet } from './media.js';
+import type { OrderingSettings } from './restaurants.js';
 
 export const ORDER_TYPES = ['DINE_IN', 'PICKUP'] as const;
 export type OrderType = (typeof ORDER_TYPES)[number];
@@ -87,11 +88,17 @@ export const placeOrderSchema = z
 /** Idempotency-Key header: generated once per checkout, reused on retries. */
 export const idempotencyKeySchema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/, 'Send an Idempotency-Key header.');
 
-export const updateOrderStatusSchema = z.strictObject({
-  status: z.enum(['ACCEPTED', 'PREPARING', 'READY', 'COMPLETED', 'REJECTED', 'CANCELLED']),
-  /** Shown to the diner for rejected and cancelled orders. */
-  reason: optionalText(300),
-});
+export const updateOrderStatusSchema = z
+  .strictObject({
+    status: z.enum(['ACCEPTED', 'PREPARING', 'READY', 'COMPLETED', 'REJECTED', 'CANCELLED']),
+    /** Shown to the diner; required for rejected and cancelled orders. */
+    reason: optionalText(300),
+  })
+  .superRefine((change, context) => {
+    if ((change.status === 'REJECTED' || change.status === 'CANCELLED') && !change.reason) {
+      context.addIssue({ code: 'custom', path: ['reason'], message: 'Tell the customer why.' });
+    }
+  });
 
 export const ordersQuerySchema = z.object({
   /** active: the board (oldest first). history: closed orders (newest first). */
@@ -131,6 +138,8 @@ type OrderCore = {
   completedAt: string | null;
   closedAt: string | null;
   rejectionReason: string | null;
+  /** Changes on every update; the newer of two copies has the later value. */
+  updatedAt: string;
 };
 
 /** An order as the restaurant sees it. */
@@ -190,7 +199,10 @@ export const REALTIME_PATH = '/v1/realtime';
 export const REALTIME_EVENTS = {
   ORDER_CREATED: 'order.created',
   ORDER_UPDATED: 'order.updated',
+  /** /owner only: ordering settings changed (e.g. paused on another device). */
+  RESTAURANT_UPDATED: 'restaurant.updated',
 } as const;
 
 export type OwnerOrderEvent = { order: OwnerOrder };
 export type TrackedOrderEvent = { order: PublicOrder };
+export type RestaurantUpdatedEvent = { ordering: OrderingSettings };
