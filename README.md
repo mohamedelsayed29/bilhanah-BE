@@ -1,6 +1,75 @@
-# NestJS Backend
+# Bilhanah (بالهنا): backend
 
-Stack: Node.js, NestJS, TypeScript, PostgreSQL, Prisma, Redis and BullMQ. Socket.IO is planned for live orders.
+Digital menus, ordering and order-ready alerts for restaurants in Egypt. Bilhanah is three repositories, cloned side by side:
+
+| Repository | What it is |
+| --- | --- |
+| **bilhanah-BE** (this one) | NestJS API and background worker, the shared `packages/`, and `infra/` (local services, the production stack, deploys) |
+| [bilhanah-client-FE](https://github.com/mohamedelsayed29/bilhanah-client-FE) | Public website and restaurant pages, `{subdomain}.bilhanah.com` |
+| [bilhanah-dashboard-FE](https://github.com/mohamedelsayed29/bilhanah-dashboard-FE) | Restaurant-owner dashboard and the admin console |
+
+```
+bilhanah/
+  bilhanah-BE/
+  bilhanah-client-FE/
+  bilhanah-dashboard-FE/
+```
+
+| Path | What it is |
+| --- | --- |
+| `src`, `test` | The API and worker (below) |
+| `packages/contracts` | Request/response schemas and error codes shared with the website and dashboard |
+| `packages/database` | Prisma schema and migrations |
+| `packages/config` | Shared TypeScript settings |
+| `infra` | Local services (`compose.dev.yml`), the production stack, Caddy and deploy/backup scripts ([runbook](infra/RUNBOOK.md)) |
+| `scripts` | `dev.sh` (run everything), `seed-demo.mjs`, `sync-contracts.sh` |
+
+## Run it locally
+
+Requirements: Node.js 24+ and Docker (Docker Desktop with its engine running).
+
+```bash
+npm run dev          # or: bash scripts/dev.sh
+```
+
+The script creates `.env` on first run, installs dependencies, starts PostgreSQL, Redis and Mailpit in Docker, applies migrations, then runs the API and the worker, and also the website and the dashboard when their repositories are cloned next to this one. Ctrl+C stops the apps; `npm run services:down` stops the Docker services.
+
+| | |
+| --- | --- |
+| Website | http://127.0.0.1:5180 |
+| A restaurant's page | http://`<subdomain>`.localhost:5180 |
+| Dashboard (owners) | http://127.0.0.1:5174 |
+| API | http://127.0.0.1:3000 (`/health/ready`) |
+| Email sent by the app (Mailpit) | http://127.0.0.1:8025 |
+
+Use `WEB_PORT=…` to run the website on another port. With the stack running, `npm run seed:demo` creates a demo restaurant with a full menu and photos at http://koshary-demo.localhost:5180 (owner `demo-owner@bilhanah.local` / `demo-password-1`).
+
+| Command | Purpose |
+| --- | --- |
+| `npm run typecheck`, `npm run lint` | TypeScript check, lint |
+| `npm test` | Unit tests (Vitest); `npm run test:contracts` for the contracts |
+| `npm run test:e2e` | HTTP tests against the local services (isolated `bilhanah_test` database, Redis DB 1) |
+| `npm run db:migrate` | Create/apply a migration after editing `packages/database/prisma/schema.prisma` |
+| `npm run build` | Compile to `dist/` |
+| `npm run start:dev`, `npm run start:worker:dev` | The API or the worker alone, in watch mode |
+
+## Changing the contracts
+
+`packages/contracts` lives here; the website and dashboard each keep a copy in their own `packages/` so they build on their own. After changing it:
+
+```bash
+npm run contracts:sync   # copies it into ../bilhanah-client-FE and ../bilhanah-dashboard-FE
+```
+
+then commit the copy in each frontend repository. Keep changes backward compatible (add fields; remove them a release later), since the three repositories deploy separately.
+
+## Deploy
+
+Production is one server with Docker Compose behind Caddy, with the three repositories cloned side by side; see [infra/RUNBOOK.md](infra/RUNBOOK.md) for provisioning, DNS, deploys, backups and how to try the production stack locally.
+
+## The API
+
+Stack: Node.js, NestJS, TypeScript, PostgreSQL, Prisma, Redis, BullMQ and Socket.IO.
 
 | Directory | Responsibility |
 | --- | --- |
@@ -16,27 +85,6 @@ The HTTP API (`src/main.ts`) and the background worker (`src/worker.ts`) are two
 A business module can contain its module definition, controllers, services, scoped repository, policies, events, and colocated unit tests. Create these files when implementing the corresponding feature; empty TypeScript stubs are intentionally not generated.
 
 Database schema and migrations belong in `packages/database`. Request/response contracts belong in `packages/contracts`. Never expose Prisma models or secrets directly to frontend clients.
-
-## Running locally
-
-From the repository root:
-
-```bash
-cp .env.example .env     # first time only
-npm install
-npm run services:up      # PostgreSQL 18, Redis 8, Mailpit in Docker
-npm run db:deploy        # apply migrations
-npm run dev:api          # http://127.0.0.1:3000
-npm run dev:worker       # background jobs: email delivery, hourly cleanup
-```
-
-| Command (root) | Purpose |
-| --- | --- |
-| `npm run typecheck:api` | TypeScript check |
-| `npm run test:api` | Unit tests (Vitest) |
-| `npm run test:api:e2e` | HTTP tests against the local services (isolated `bilhanah_test` database, Redis DB 1) |
-| `npm run db:migrate` | Create/apply a migration after editing `packages/database/prisma/schema.prisma` |
-| `npm run build:api` | Compile to `dist/` |
 
 ## HTTP conventions
 

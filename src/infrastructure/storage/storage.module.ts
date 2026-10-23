@@ -7,7 +7,7 @@ import { S3StorageService } from './s3-storage.service.js';
 import { StorageService } from './storage.service.js';
 
 /** var/media at the repository root (same depth from src/ and dist/). */
-export const DEFAULT_LOCAL_STORAGE_DIR = resolve(import.meta.dirname, '../../../../../var/media');
+export const DEFAULT_LOCAL_STORAGE_DIR = resolve(import.meta.dirname, '../../../var/media');
 
 @Global()
 @Module({

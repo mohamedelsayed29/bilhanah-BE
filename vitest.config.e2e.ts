@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
 // E2E tests use the local Docker services but an isolated database
 // (bilhanah_test) and Redis logical database 1, so development data is untouched.
 try {
-  process.loadEnvFile(resolve(import.meta.dirname, '../../.env'));
+  process.loadEnvFile(resolve(import.meta.dirname, '.env'));
 } catch {
   // CI provides variables directly.
 }

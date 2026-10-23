@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/dist-worker
+**/*.tsbuildinfo
+**/test-results
+**/playwright-report
+**/.env
+**/.env.*
+!**/.env.example
+.git
+packages/database/src/generated

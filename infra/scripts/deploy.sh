@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Builds and starts a release on the server: images, migrations, then a
-# rolling restart of the API so the site stays up. Run from the repository root.
+# rolling restart of the API so the site stays up. The website and dashboard
+# are built from bilhanah-client-FE and bilhanah-dashboard-FE, cloned next to
+# this repository; pull all three before deploying.
 #   bash infra/scripts/deploy.sh
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
@@ -9,7 +11,7 @@ compose=(docker compose -f infra/compose.prod.yml --env-file infra/.env.prod)
 [[ -f infra/.env.prod ]] || { echo "infra/.env.prod is missing (see infra/.env.prod.example)." >&2; exit 1; }
 
 echo "==> Building images"
-"${compose[@]}" build api migrate caddy
+"${compose[@]}" build api migrate web dashboard caddy
 
 echo "==> Starting the database and Redis"
 "${compose[@]}" up -d --wait postgres redis
@@ -17,10 +19,10 @@ echo "==> Starting the database and Redis"
 echo "==> Applying migrations"
 "${compose[@]}" run --rm migrate
 
-echo "==> Rolling out the API, worker and edge"
+echo "==> Rolling out the API, worker, website, dashboard and edge"
 # --no-deps keeps postgres/redis running; compose replaces containers one service at a time.
 "${compose[@]}" up -d --no-deps --wait api
-"${compose[@]}" up -d --no-deps worker caddy
+"${compose[@]}" up -d --no-deps worker web dashboard caddy
 
 echo "==> Checking health"
 for _ in $(seq 1 30); do

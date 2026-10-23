@@ -8,6 +8,9 @@
 #   api.{ROOT_DOMAIN}    API (and /media when images are stored on this server)
 #   app.{ROOT_DOMAIN}    dashboard
 #   *.{ROOT_DOMAIN}      restaurant menus (the website in restaurant mode)
+#
+# The website and dashboard are separate containers (bilhanah-client-FE and
+# bilhanah-dashboard-FE); each serves its own files and cache headers.
 {
 	email {$ACME_EMAIL}
 	admin off
@@ -30,16 +33,6 @@
 	}
 }
 
-# A single-page app: hashed assets cache forever, index.html never does.
-(spa) {
-	@assets path /assets/*
-	header @assets Cache-Control "public, max-age=31536000, immutable"
-	@html not path /assets/*
-	header @html Cache-Control "no-cache"
-	try_files {path} /index.html
-	file_server
-}
-
 www.{$ROOT_DOMAIN} {
 	import /etc/caddy/tls/{$TLS_MODE:cloudflare}
 	redir https://{$ROOT_DOMAIN}{uri} permanent
@@ -48,8 +41,7 @@ www.{$ROOT_DOMAIN} {
 {$ROOT_DOMAIN} {
 	import /etc/caddy/tls/{$TLS_MODE:cloudflare}
 	import common
-	root * /srv/web
-	import spa
+	reverse_proxy web:80
 }
 
 *.{$ROOT_DOMAIN} {
@@ -76,12 +68,10 @@ www.{$ROOT_DOMAIN} {
 
 	@dashboard host app.{$ROOT_DOMAIN}
 	handle @dashboard {
-		root * /srv/dashboard
-		import spa
+		reverse_proxy dashboard:80
 	}
 
 	handle {
-		root * /srv/web
-		import spa
+		reverse_proxy web:80
 	}
 }

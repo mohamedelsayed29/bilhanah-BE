@@ -15,7 +15,7 @@ const ORIGIN = process.env.DASHBOARD_ORIGIN ?? 'http://127.0.0.1:5174';
 const EMAIL = 'demo-owner@bilhanah.local';
 const PASSWORD = 'demo-password-1';
 const SUBDOMAIN = 'koshary-demo';
-const MEDIA = resolve(import.meta.dirname, '../apps/web/public/media');
+const MEDIA = resolve(import.meta.dirname, 'demo-media');
 const reset = process.argv.includes('--reset');
 
 let token = '';

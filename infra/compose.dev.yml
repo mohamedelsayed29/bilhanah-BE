@@ -1,6 +1,6 @@
 name: bilhanah-menu
 
-# Local services for the API. Ports match the defaults in bilhanah-BE/vitest.config.e2e.ts.
+# Local services for the API. Ports match the defaults in vitest.config.e2e.ts.
 services:
   postgres:
     image: postgres:18

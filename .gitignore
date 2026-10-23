@@ -1,8 +1,13 @@
 node_modules/
 dist/
-coverage/
 *.tsbuildinfo
 .env
 .env.*
 !.env.example
+packages/database/src/generated/
+coverage/
+test-results/
+playwright-report/
 dist-worker/
+var/
+!.env.prod.example

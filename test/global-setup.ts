@@ -18,7 +18,7 @@ export default async function setup(): Promise<void> {
   }
 
   execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
-    cwd: resolve(import.meta.dirname, '../../../packages/database'),
+    cwd: resolve(import.meta.dirname, '../packages/database'),
     env: { ...process.env, DATABASE_URL: testUrl.toString() },
     stdio: 'pipe',
   });

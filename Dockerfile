@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Build from the repository root: docker build -f apps/api/Dockerfile .
+# Build from the repository root: docker build .
 
 FROM node:24-slim AS base
 WORKDIR /app
@@ -11,31 +11,24 @@ COPY package.json package-lock.json ./
 COPY packages/config/package.json packages/config/
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/database/package.json packages/database/
-COPY apps/api/package.json apps/api/
-COPY apps/web/package.json apps/web/
 
 FROM manifests AS build
 RUN npm ci --ignore-scripts
 COPY packages packages
-COPY apps/api apps/api
-RUN npm run build -w @bilhanah/contracts -w @bilhanah/database -w @bilhanah/backend
+COPY tsconfig.json tsconfig.build.json nest-cli.json ./
+COPY src src
+RUN npm run build:packages && npm run build
 
 # Runs `prisma migrate deploy` as a one-off container before each release.
 FROM build AS migrate
 WORKDIR /app/packages/database
 CMD ["npx", "prisma", "migrate", "deploy"]
 
-# Only the API's workspaces: npm ci ignores -w filters, so the web manifest is
-# left out to keep its dependencies out. Packages the lockfile marks
-# devOptional (the Prisma CLI, Studio and TypeScript, which @prisma/client
-# lists as optional peers) are then removed. --omit=optional is not used
-# because sharp's native binaries are optional dependencies.
-FROM base AS prod-deps
-COPY package.json package-lock.json ./
-COPY packages/config/package.json packages/config/
-COPY packages/contracts/package.json packages/contracts/
-COPY packages/database/package.json packages/database/
-COPY apps/api/package.json apps/api/
+# Packages the lockfile marks devOptional (the Prisma CLI, Studio and
+# TypeScript, which @prisma/client lists as optional peers) are removed after
+# the install. --omit=optional is not used because sharp's native binaries are
+# optional dependencies.
+FROM manifests AS prod-deps
 RUN npm ci --ignore-scripts --omit=dev \
  && node -e "const fs=require('fs');const p=require('./package-lock.json').packages;for(const[k,v]of Object.entries(p))if(v.devOptional&&k.startsWith('node_modules/'))fs.rmSync(k,{recursive:true,force:true})"
 
@@ -47,12 +40,10 @@ COPY --from=build /app/packages/contracts/package.json packages/contracts/
 COPY --from=build /app/packages/contracts/dist packages/contracts/dist
 COPY --from=build /app/packages/database/package.json packages/database/
 COPY --from=build /app/packages/database/dist packages/database/dist
-COPY --from=build /app/apps/api/package.json apps/api/
-COPY --from=build /app/apps/api/dist apps/api/dist
+COPY --from=build /app/dist dist
 # Mount point for STORAGE_DRIVER=local. A new named volume takes this ownership,
 # so the unprivileged user can write uploads.
 RUN mkdir -p /data/media && chown node:node /data/media
-WORKDIR /app/apps/api
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \

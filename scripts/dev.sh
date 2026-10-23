@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Runs Bilhanah locally: Docker services, migrations, then the API, the
-# background worker, the website and the dashboard together. Ctrl+C stops the apps; the
-# Docker services keep running (stop them with `npm run services:down`).
+# Runs Bilhanah locally: Docker services, migrations, then the API and the
+# background worker, plus the website and the dashboard when their repositories
+# are cloned next to this one (../bilhanah-client-FE, ../bilhanah-dashboard-FE).
+# Ctrl+C stops the apps; the Docker services keep running (stop them with
+# `npm run services:down`).
 #
 #   bash scripts/dev.sh            # or: npm run dev
 #   WEB_PORT=5190 bash scripts/dev.sh
@@ -9,6 +11,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+WEB_DIR="$(dirname "$ROOT")/bilhanah-client-FE"
+DASHBOARD_DIR="$(dirname "$ROOT")/bilhanah-dashboard-FE"
 
 WEB_PORT="${WEB_PORT:-5180}"
 # Fixed: the API allows this origin (CORS_ORIGINS) and email links point at it (DASHBOARD_URL).
@@ -54,6 +58,18 @@ elif [[ ! -f packages/contracts/dist/index.js || ! -f packages/database/dist/ind
   step "Building shared packages"
   npm run build:packages
 fi
+frontends=()
+for dir in "$WEB_DIR" "$DASHBOARD_DIR"; do
+  if [[ -f "$dir/package.json" ]]; then
+    frontends+=("$dir")
+    if [[ ! -d "$dir/node_modules" || "$dir/package-lock.json" -nt "$dir/node_modules/.package-lock.json" ]]; then
+      step "Installing dependencies in $(basename "$dir")"
+      (cd "$dir" && npm install)
+    fi
+  else
+    printf '%sNote:%s %s is not cloned next to this repository; skipping it.\n' "$yellow" "$reset" "$(basename "$dir")"
+  fi
+done
 
 # --- Services and database --------------------------------------------------
 step "Starting PostgreSQL, Redis and Mailpit"
@@ -83,12 +99,16 @@ start() {
   pids+=("$!")
 }
 
-step "Starting the API, worker, website and dashboard"
-start api "$green" "npm run --silent dev:api"
-start worker "$magenta" "npm run --silent dev:worker"
-start web "$cyan" "VITE_API_URL=http://127.0.0.1:$API_PORT VITE_ROOT_DOMAIN=localhost \
-  VITE_DASHBOARD_URL=http://127.0.0.1:$DASHBOARD_PORT npm run --silent dev -w @bilhanah/web -- --port $WEB_PORT --strictPort"
-start dashboard "$yellow" "VITE_API_URL=http://127.0.0.1:$API_PORT npm run --silent dev -w @bilhanah/dashboard"
+step "Starting the API and worker${frontends:+, website and dashboard}"
+start api "$green" "npm run --silent start:dev"
+start worker "$magenta" "npm run --silent start:worker:dev"
+if [[ -f "$WEB_DIR/package.json" ]]; then
+  start web "$cyan" "cd '$WEB_DIR' && VITE_API_URL=http://127.0.0.1:$API_PORT VITE_ROOT_DOMAIN=localhost \
+    VITE_DASHBOARD_URL=http://127.0.0.1:$DASHBOARD_PORT npm run --silent dev -- --port $WEB_PORT --strictPort"
+fi
+if [[ -f "$DASHBOARD_DIR/package.json" ]]; then
+  start dashboard "$yellow" "cd '$DASHBOARD_DIR' && VITE_API_URL=http://127.0.0.1:$API_PORT npm run --silent dev"
+fi
 
 # Wait for the API, then print where everything is.
 for _ in $(seq 1 120); do

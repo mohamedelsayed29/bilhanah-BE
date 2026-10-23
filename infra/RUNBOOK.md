@@ -4,7 +4,8 @@ Bilhanah runs on one server with Docker Compose (`infra/compose.prod.yml`):
 
 | Service | Role |
 | --- | --- |
-| `caddy` | HTTPS for `bilhanah.com`, `*.bilhanah.com` (wildcard certificate), serves the website and dashboard, proxies the API |
+| `caddy` | HTTPS for `bilhanah.com`, `*.bilhanah.com` (wildcard certificate); routes to the website, dashboard and API |
+| `web`, `dashboard` | The website and dashboard, built from `bilhanah-client-FE` and `bilhanah-dashboard-FE` |
 | `api` ×2 | NestJS HTTP API (`dist/main.js`) |
 | `worker` | Background jobs: email delivery with retries, hourly cleanup (`dist/worker.js`) |
 | `postgres`, `redis` | Data; Redis persists queued jobs (AOF) |
@@ -21,7 +22,14 @@ Hosts: `bilhanah.com` (website, `www` redirects), `app.` (dashboard), `api.` (AP
    apt install -y unattended-upgrades rclone
    ```
 3. Install Docker Engine and the Compose plugin (docs.docker.com/engine/install/ubuntu).
-4. Clone the repository to `/opt/bilhanah`.
+4. Clone the three repositories side by side into `/opt/bilhanah`:
+   ```bash
+   mkdir -p /opt/bilhanah && cd /opt/bilhanah
+   git clone https://github.com/mohamedelsayed29/bilhanah-BE
+   git clone https://github.com/mohamedelsayed29/bilhanah-client-FE
+   git clone https://github.com/mohamedelsayed29/bilhanah-dashboard-FE
+   ```
+   The commands below run in `/opt/bilhanah/bilhanah-BE`.
 
 ## 2. DNS (Cloudflare)
 
@@ -48,11 +56,13 @@ Fill in every value. Secrets are generated fresh for production, never copied fr
 ## 4. Deploy (first time and every release)
 
 ```bash
-cd /opt/bilhanah && git pull
+cd /opt/bilhanah
+for repo in bilhanah-BE bilhanah-client-FE bilhanah-dashboard-FE; do git -C $repo pull --ff-only; done
+cd bilhanah-BE
 bash infra/scripts/deploy.sh
 ```
 
-The script builds the images, starts Postgres and Redis, applies migrations, then replaces the API, worker and edge. Caddy retries requests for up to 10 s while API containers restart, so deploys cause at most a short delay.
+The script builds the images (the website and dashboard from their sibling repositories), starts Postgres and Redis, applies migrations, then replaces the API, worker, website, dashboard and edge. Caddy retries requests for up to 10 s while API containers restart, so deploys cause at most a short delay.
 
 **Migrations must stay backward compatible for one release** (add columns before using them; drop them a release later), because the old API keeps serving while the new one starts.
 
@@ -77,7 +87,7 @@ Database migrations are not rolled back automatically; that is why they must be 
 Nightly with cron (`crontab -e` as root):
 
 ```cron
-0 3 * * * BACKUP_REMOTE=r2:bilhanah-backups /opt/bilhanah/infra/scripts/backup.sh >> /var/log/bilhanah-backup.log 2>&1
+0 3 * * * BACKUP_REMOTE=r2:bilhanah-backups /opt/bilhanah/bilhanah-BE/infra/scripts/backup.sh >> /var/log/bilhanah-backup.log 2>&1
 ```
 
 Dumps are kept 30 days in `/var/backups/bilhanah`.
@@ -95,7 +105,7 @@ bash infra/scripts/restore.sh /var/backups/bilhanah/bilhanah-<timestamp>.dump
 | Task | Command (prefix: `docker compose -f infra/compose.prod.yml --env-file infra/.env.prod`) |
 | --- | --- |
 | Status | `ps` |
-| Logs | `logs -f --tail=200 api worker caddy` |
+| Logs | `logs -f --tail=200 api worker web dashboard caddy` |
 | Database shell | `exec postgres psql -U bilhanah bilhanah` |
 | Restart a service | `restart worker` |
 
@@ -103,7 +113,7 @@ Health: `https://api.bilhanah.com/health/ready` checks PostgreSQL and Redis. Poi
 
 ## Test the production stack locally
 
-The same files run on a laptop with Caddy's internal certificates:
+The same files run on a laptop with Caddy's internal certificates (with the website and dashboard repositories cloned next to this one):
 
 ```bash
 cat > infra/.env.prod <<'ENV'

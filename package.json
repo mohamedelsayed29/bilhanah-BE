@@ -4,7 +4,24 @@
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
+    "dev": "bash scripts/dev.sh",
+    "seed:demo": "node scripts/seed-demo.mjs",
+    "postinstall": "npm run build:packages",
+    "build:packages": "npm run build -w @bilhanah/contracts -w @bilhanah/database",
+    "services:up": "docker compose -f infra/compose.dev.yml up -d --wait",
+    "services:down": "docker compose -f infra/compose.dev.yml down",
+    "db:deploy": "npm run migrate:deploy -w @bilhanah/database",
+    "db:migrate": "npm run migrate:dev -w @bilhanah/database",
+    "db:studio": "npm run studio -w @bilhanah/database",
+    "contracts:sync": "bash scripts/sync-contracts.sh",
     "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -19,7 +36,8 @@
     "test:watch": "vitest",
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
     "admin:create": "node dist/commands/create-admin.cli.js",
-    "admin:reset-mfa": "node dist/commands/reset-admin-mfa.cli.js"
+    "admin:reset-mfa": "node dist/commands/reset-admin-mfa.cli.js",
+    "test:contracts": "npm test -w @bilhanah/contracts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1148.0",
