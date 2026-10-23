@@ -101,7 +101,24 @@ export const updateRestaurantSchema = z.strictObject({
     .nullable()
     .optional(),
   openingHours: openingHoursSchema.nullable().optional(),
+  /** Ordering (plans with ordering only): switched on, order types, and a temporary pause. */
+  orderingEnabled: z.boolean().optional(),
+  acceptsDineIn: z.boolean().optional(),
+  acceptsPickup: z.boolean().optional(),
+  ordersPaused: z.boolean().optional(),
 });
+
+export type OrderingSettings = {
+  /** The plan includes ordering. */
+  included: boolean;
+  enabled: boolean;
+  acceptsDineIn: boolean;
+  acceptsPickup: boolean;
+  paused: boolean;
+};
+
+/** What diners need to decide whether to show the cart. Opening hours are checked separately. */
+export type PublicOrdering = { accepting: boolean; dineIn: boolean; pickup: boolean };
 
 /** Presentation shared by the owner and public views. */
 export type RestaurantBranding = {
@@ -132,6 +149,7 @@ export type OwnerRestaurant = {
   instagramUrl: string | null;
   createdAt: string;
   access: RestaurantAccess;
+  ordering: OrderingSettings;
 } & RestaurantBranding;
 
 export type PublicRestaurant =
@@ -148,6 +166,7 @@ export type PublicRestaurant =
       facebookUrl: string | null;
       instagramUrl: string | null;
       timezone: string;
+      ordering: PublicOrdering;
     } & RestaurantBranding)
   | { availability: 'TEMPORARILY_UNAVAILABLE'; subdomain: string; name: string; defaultLanguage: Language };
 

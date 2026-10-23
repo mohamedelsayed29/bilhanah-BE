@@ -165,18 +165,27 @@ model Restaurant {
   openingHours    Json?            @map("opening_hours")
   /// Bumped on every change to the public menu; part of its cache key.
   menuVersion     Int              @default(0) @map("menu_version")
+  /// The owner has switched ordering on (it also needs a plan with ordering).
+  orderingEnabled Boolean          @default(false) @map("ordering_enabled")
+  acceptsDineIn   Boolean          @default(true) @map("accepts_dine_in")
+  acceptsPickup   Boolean          @default(true) @map("accepts_pickup")
+  /// Temporarily not taking new orders (busy kitchen, closing early).
+  ordersPaused    Boolean          @default(false) @map("orders_paused")
   createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  owner        User                  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  entitlements Entitlement[]
-  logo         Media?                @relation("RestaurantLogo", fields: [logoId], references: [id], onDelete: SetNull)
-  cover        Media?                @relation("RestaurantCover", fields: [coverId], references: [id], onDelete: SetNull)
-  media        Media[]               @relation("RestaurantMedia")
-  categories   Category[]
-  menuItems    MenuItem[]
-  payments     SubscriptionPayment[]
-  reminders    ExpiryReminder[]
+  owner         User                  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  entitlements  Entitlement[]
+  logo          Media?                @relation("RestaurantLogo", fields: [logoId], references: [id], onDelete: SetNull)
+  cover         Media?                @relation("RestaurantCover", fields: [coverId], references: [id], onDelete: SetNull)
+  media         Media[]               @relation("RestaurantMedia")
+  categories    Category[]
+  menuItems     MenuItem[]
+  payments      SubscriptionPayment[]
+  reminders     ExpiryReminder[]
+  tables        Table[]
+  orders        Order[]
+  orderCounters OrderCounter[]
 
   @@map("restaurants")
 }
@@ -252,6 +261,7 @@ model MenuItem {
   category   Category          @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   image      Media?            @relation(fields: [imageId], references: [id], onDelete: SetNull)
   variants   MenuItemVariant[]
+  orderItems OrderItem[]
 
   @@index([categoryId, sortOrder])
   @@index([restaurantId])
@@ -422,4 +432,114 @@ model ExpiryReminder {
 
   @@unique([entitlementId, daysBefore])
   @@map("expiry_reminders")
+}
+
+/// A dining table with its own QR code ({publicUrl}/?t={publicCode}).
+model Table {
+  id           String   @id @default(uuid()) @db.Uuid
+  restaurantId String   @map("restaurant_id") @db.Uuid
+  label        String   @db.VarChar(40)
+  /// Random code printed in the table's QR; regenerating it retires printed codes.
+  publicCode   String   @unique @map("public_code") @db.VarChar(16)
+  isActive     Boolean  @default(true) @map("is_active")
+  sortOrder    Int      @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  orders     Order[]
+
+  @@unique([restaurantId, label])
+  @@index([restaurantId, sortOrder])
+  @@map("tables")
+}
+
+enum OrderType {
+  DINE_IN
+  PICKUP
+
+  @@map("order_type")
+}
+
+enum OrderStatus {
+  PLACED
+  ACCEPTED
+  PREPARING
+  READY
+  COMPLETED
+  REJECTED
+  CANCELLED
+
+  @@map("order_status")
+}
+
+/// An order placed by a diner. Names and prices are copied at placement, so menu edits never change it.
+model Order {
+  id               String      @id @default(uuid()) @db.Uuid
+  restaurantId     String      @map("restaurant_id") @db.Uuid
+  /// Daily sequence per restaurant (restaurant time zone): #1, #2, ...
+  number           Int
+  /// The restaurant's local date the number belongs to.
+  businessDay      DateTime    @map("business_day") @db.Date
+  type             OrderType
+  tableId          String?     @map("table_id") @db.Uuid
+  /// Kept even if the table is renamed or deleted.
+  tableLabel       String?     @map("table_label") @db.VarChar(40)
+  customerName     String      @map("customer_name") @db.VarChar(60)
+  customerPhone    String?     @map("customer_phone") @db.VarChar(20)
+  note             String?     @db.VarChar(300)
+  status           OrderStatus @default(PLACED)
+  subtotalPiastres Int         @map("subtotal_piastres")
+  /// Client-generated key; a retried submission returns the same order.
+  idempotencyKey   String      @map("idempotency_key") @db.VarChar(64)
+  rejectionReason  String?     @map("rejection_reason") @db.VarChar(300)
+  placedAt         DateTime    @default(now()) @map("placed_at") @db.Timestamptz(3)
+  acceptedAt       DateTime?   @map("accepted_at") @db.Timestamptz(3)
+  readyAt          DateTime?   @map("ready_at") @db.Timestamptz(3)
+  completedAt      DateTime?   @map("completed_at") @db.Timestamptz(3)
+  closedAt         DateTime?   @map("closed_at") @db.Timestamptz(3)
+  updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  table      Table?      @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  items      OrderItem[]
+
+  @@unique([restaurantId, idempotencyKey])
+  @@unique([restaurantId, businessDay, number])
+  @@index([restaurantId, status, placedAt])
+  @@index([restaurantId, placedAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                String  @id @default(uuid()) @db.Uuid
+  orderId           String  @map("order_id") @db.Uuid
+  /// The menu item, while it still exists; the names and price below are copies.
+  menuItemId        String? @map("menu_item_id") @db.Uuid
+  nameAr            String  @map("name_ar") @db.VarChar(100)
+  nameEn            String? @map("name_en") @db.VarChar(100)
+  variantNameAr     String? @map("variant_name_ar") @db.VarChar(40)
+  variantNameEn     String? @map("variant_name_en") @db.VarChar(40)
+  unitPricePiastres Int     @map("unit_price_piastres")
+  quantity          Int
+  note              String? @db.VarChar(200)
+  sortOrder         Int     @map("sort_order")
+
+  order    Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+/// The last order number used per restaurant and business day.
+model OrderCounter {
+  restaurantId String   @map("restaurant_id") @db.Uuid
+  businessDay  DateTime @map("business_day") @db.Date
+  lastNumber   Int      @map("last_number")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@id([restaurantId, businessDay])
+  @@map("order_counters")
 }
