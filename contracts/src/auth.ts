@@ -46,6 +46,12 @@ export const changePasswordSchema = z.object({
 
 export const sessionIdParamSchema = z.uuid();
 
+/** The owner's own name and the language of the emails Bilhanah sends them. */
+export const updateProfileSchema = z.strictObject({
+  fullName: z.string().trim().min(2).max(100).optional(),
+  preferredLanguage: languageSchema.optional(),
+});
+
 export type AuthUser = {
   id: string;
   email: string;
