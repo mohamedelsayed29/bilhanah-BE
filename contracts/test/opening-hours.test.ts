@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { isOpenAt, type OpeningHours, openingHoursSchema } from '../src/opening-hours.js';
+import { isOpenAt } from '../src/hours.js';
+import { type OpeningHours, openingHoursSchema } from '../src/opening-hours.js';
 
 const closed = { sat: [], sun: [], mon: [], tue: [], wed: [], thu: [], fri: [] };
 // 2026-10-24 is a Saturday. Cairo is UTC+3 in October 2026.
