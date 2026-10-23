@@ -1,0 +1,545 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+
+  @@map("user_role")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+
+  @@map("user_status")
+}
+
+enum Language {
+  ar
+  en
+
+  @@map("language")
+}
+
+enum SessionRevokedReason {
+  LOGOUT
+  REFRESH_TOKEN_REUSE
+  PASSWORD_RESET
+  PASSWORD_CHANGE
+  /// Ended from the account's session list.
+  REVOKED_BY_USER
+
+  @@map("session_revoked_reason")
+}
+
+enum RestaurantStatus {
+  ACTIVE
+  SUSPENDED
+
+  @@map("restaurant_status")
+}
+
+enum PlanCode {
+  MENU
+  ORDERS
+  ADVANCED
+
+  @@map("plan_code")
+}
+
+enum EntitlementKind {
+  TRIAL
+  PAID
+
+  @@map("entitlement_kind")
+}
+
+model User {
+  id                String     @id @default(uuid()) @db.Uuid
+  email             String     @unique
+  /// Null when nobody may sign in with a password until the inbox owner sets one (see AuthService.register).
+  passwordHash      String?    @map("password_hash")
+  fullName          String     @map("full_name")
+  preferredLanguage Language   @default(ar) @map("preferred_language")
+  role              UserRole   @default(OWNER)
+  status            UserStatus @default(ACTIVE)
+  emailVerifiedAt   DateTime?  @map("email_verified_at") @db.Timestamptz(3)
+  passwordChangedAt DateTime?  @map("password_changed_at") @db.Timestamptz(3)
+  /// Administrators only: TOTP secret, AES-256-GCM encrypted (see TotpService).
+  totpSecret        String?    @map("totp_secret")
+  /// Last accepted TOTP time step, so a code cannot be used twice.
+  totpLastStep      Int?       @map("totp_last_step")
+  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  sessions                Session[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  restaurant              Restaurant?
+  reviewedPayments        SubscriptionPayment[]
+  grantedEntitlements     Entitlement[]
+  auditLogs               AuditLog[]
+
+  @@map("users")
+}
+
+/// A refresh-token session. Only a hash of the current secret is stored; it rotates on every refresh.
+model Session {
+  id            String                @id @default(uuid()) @db.Uuid
+  userId        String                @map("user_id") @db.Uuid
+  tokenHash     String                @map("token_hash") @db.Char(64)
+  expiresAt     DateTime              @map("expires_at") @db.Timestamptz(3)
+  lastUsedAt    DateTime?             @map("last_used_at") @db.Timestamptz(3)
+  revokedAt     DateTime?             @map("revoked_at") @db.Timestamptz(3)
+  revokedReason SessionRevokedReason? @map("revoked_reason")
+  userAgent     String?               @map("user_agent") @db.VarChar(512)
+  ipAddress     String?               @map("ip_address") @db.VarChar(64)
+  createdAt     DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verification_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+model Restaurant {
+  id              String           @id @default(uuid()) @db.Uuid
+  /// One restaurant per owner account.
+  ownerId         String           @unique @map("owner_id") @db.Uuid
+  name            String
+  /// Permanent public address: {subdomain}.bilhanah.com
+  subdomain       String           @unique
+  contactName     String           @map("contact_name")
+  phone           String
+  city            String
+  address         String
+  defaultLanguage Language         @default(ar) @map("default_language")
+  timezone        String           @default("Africa/Cairo")
+  whatsappNumber  String?          @map("whatsapp_number")
+  websiteUrl      String?          @map("website_url")
+  facebookUrl     String?          @map("facebook_url")
+  instagramUrl    String?          @map("instagram_url")
+  status          RestaurantStatus @default(ACTIVE)
+  logoId          String?          @map("logo_id") @db.Uuid
+  coverId         String?          @map("cover_id") @db.Uuid
+  /// #rrggbb
+  brandColor      String?          @map("brand_color") @db.Char(7)
+  /// Weekly opening hours (contracts openingHoursSchema); null when not set.
+  openingHours    Json?            @map("opening_hours")
+  /// Bumped on every change to the public menu; part of its cache key.
+  menuVersion     Int              @default(0) @map("menu_version")
+  /// The owner has switched ordering on (it also needs a plan with ordering).
+  orderingEnabled Boolean          @default(false) @map("ordering_enabled")
+  acceptsDineIn   Boolean          @default(true) @map("accepts_dine_in")
+  acceptsPickup   Boolean          @default(true) @map("accepts_pickup")
+  /// Temporarily not taking new orders (busy kitchen, closing early).
+  ordersPaused    Boolean          @default(false) @map("orders_paused")
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  owner         User                  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  entitlements  Entitlement[]
+  logo          Media?                @relation("RestaurantLogo", fields: [logoId], references: [id], onDelete: SetNull)
+  cover         Media?                @relation("RestaurantCover", fields: [coverId], references: [id], onDelete: SetNull)
+  media         Media[]               @relation("RestaurantMedia")
+  categories    Category[]
+  menuItems     MenuItem[]
+  payments      SubscriptionPayment[]
+  reminders     ExpiryReminder[]
+  tables        Table[]
+  orders        Order[]
+  orderCounters OrderCounter[]
+
+  @@map("restaurants")
+}
+
+enum MediaKind {
+  LOGO
+  COVER
+  ITEM
+  /// A transfer receipt. Stored under private/ and never served publicly.
+  PAYMENT_PROOF
+
+  @@map("media_kind")
+}
+
+/// An uploaded image. The original and its resized WebP variants live in object storage.
+model Media {
+  id            String    @id @default(uuid()) @db.Uuid
+  restaurantId  String    @map("restaurant_id") @db.Uuid
+  kind          MediaKind
+  /// Storage key prefix; variants are stored at {storageKey}/{width}.webp
+  storageKey    String    @map("storage_key")
+  width         Int
+  height        Int
+  /// Widths of the generated WebP variants, smallest first.
+  variantWidths Int[]     @map("variant_widths")
+  bytes         Int
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  restaurant    Restaurant            @relation("RestaurantMedia", fields: [restaurantId], references: [id], onDelete: Cascade)
+  logoFor       Restaurant[]          @relation("RestaurantLogo")
+  coverFor      Restaurant[]          @relation("RestaurantCover")
+  menuItems     MenuItem[]
+  paymentProofs SubscriptionPayment[]
+
+  @@index([restaurantId])
+  @@map("media")
+}
+
+model Category {
+  id           String   @id @default(uuid()) @db.Uuid
+  restaurantId String   @map("restaurant_id") @db.Uuid
+  nameAr       String   @map("name_ar") @db.VarChar(80)
+  nameEn       String?  @map("name_en") @db.VarChar(80)
+  sortOrder    Int      @map("sort_order")
+  isVisible    Boolean  @default(true) @map("is_visible")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  items      MenuItem[]
+
+  @@index([restaurantId, sortOrder])
+  @@map("categories")
+}
+
+model MenuItem {
+  id            String   @id @default(uuid()) @db.Uuid
+  restaurantId  String   @map("restaurant_id") @db.Uuid
+  categoryId    String   @map("category_id") @db.Uuid
+  nameAr        String   @map("name_ar") @db.VarChar(100)
+  nameEn        String?  @map("name_en") @db.VarChar(100)
+  descriptionAr String?  @map("description_ar") @db.VarChar(500)
+  descriptionEn String?  @map("description_en") @db.VarChar(500)
+  imageId       String?  @map("image_id") @db.Uuid
+  /// False while sold out; the item stays listed.
+  isAvailable   Boolean  @default(true) @map("is_available")
+  isVisible     Boolean  @default(true) @map("is_visible")
+  sortOrder     Int      @map("sort_order")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant Restaurant        @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  category   Category          @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  image      Media?            @relation(fields: [imageId], references: [id], onDelete: SetNull)
+  variants   MenuItemVariant[]
+  orderItems OrderItem[]
+
+  @@index([categoryId, sortOrder])
+  @@index([restaurantId])
+  @@map("menu_items")
+}
+
+/// A size and its price. Single-price items have one variant without a name.
+model MenuItemVariant {
+  id            String  @id @default(uuid()) @db.Uuid
+  itemId        String  @map("item_id") @db.Uuid
+  nameAr        String? @map("name_ar") @db.VarChar(40)
+  nameEn        String? @map("name_en") @db.VarChar(40)
+  pricePiastres Int     @map("price_piastres")
+  sortOrder     Int     @map("sort_order")
+
+  item MenuItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId, sortOrder])
+  @@map("menu_item_variants")
+}
+
+/// Reference data inserted by migration. Prices are in piastres.
+model Plan {
+  code                 PlanCode @id
+  priceMonthlyPiastres Int      @map("price_monthly_piastres")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  entitlements  Entitlement[]
+  trialSettings TrialSettings[]
+  payments      SubscriptionPayment[]
+
+  @@map("plans")
+}
+
+/// A period of access. A partial unique index (see the init migration) allows one TRIAL per restaurant.
+model Entitlement {
+  id           String          @id @default(uuid()) @db.Uuid
+  restaurantId String          @map("restaurant_id") @db.Uuid
+  kind         EntitlementKind
+  planCode     PlanCode        @map("plan_code")
+  startsAt     DateTime        @map("starts_at") @db.Timestamptz(3)
+  endsAt       DateTime        @map("ends_at") @db.Timestamptz(3)
+  /// Administrator who granted it by hand (null for trials and approved payments).
+  grantedById  String?         @map("granted_by_id") @db.Uuid
+  note         String?         @db.VarChar(300)
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  restaurant Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  plan       Plan                 @relation(fields: [planCode], references: [code])
+  grantedBy  User?                @relation(fields: [grantedById], references: [id], onDelete: SetNull)
+  payment    SubscriptionPayment?
+  reminders  ExpiryReminder[]
+
+  @@index([restaurantId])
+  @@map("entitlements")
+}
+
+/// Global defaults for new trials; a single row with id 1.
+model TrialSettings {
+  id           Int      @id @default(1)
+  enabled      Boolean  @default(true)
+  durationDays Int      @default(30) @map("duration_days")
+  planCode     PlanCode @default(ADVANCED) @map("plan_code")
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  plan Plan @relation(fields: [planCode], references: [code])
+
+  @@map("trial_settings")
+}
+
+enum PaymentMethod {
+  INSTAPAY
+  VODAFONE_CASH
+  BANK_TRANSFER
+
+  @@map("payment_method")
+}
+
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  /// Withdrawn by the owner before review.
+  CANCELLED
+
+  @@map("payment_status")
+}
+
+/// A subscription paid by manual transfer and reviewed by an administrator.
+/// At most one PENDING payment per restaurant (partial unique index in SQL).
+model SubscriptionPayment {
+  id              String        @id @default(uuid()) @db.Uuid
+  restaurantId    String        @map("restaurant_id") @db.Uuid
+  planCode        PlanCode      @map("plan_code")
+  months          Int
+  /// Computed by the server from the plan price at submission.
+  amountPiastres  Int           @map("amount_piastres")
+  method          PaymentMethod
+  /// Transfer reference from the payer's receipt or SMS.
+  reference       String        @db.VarChar(100)
+  payerName       String?       @map("payer_name") @db.VarChar(80)
+  proofId         String?       @map("proof_id") @db.Uuid
+  status          PaymentStatus @default(PENDING)
+  /// The paid period created on approval.
+  entitlementId   String?       @unique @map("entitlement_id") @db.Uuid
+  reviewedById    String?       @map("reviewed_by_id") @db.Uuid
+  reviewedAt      DateTime?     @map("reviewed_at") @db.Timestamptz(3)
+  rejectionReason String?       @map("rejection_reason") @db.VarChar(300)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant  Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  plan        Plan         @relation(fields: [planCode], references: [code])
+  proof       Media?       @relation(fields: [proofId], references: [id], onDelete: SetNull)
+  entitlement Entitlement? @relation(fields: [entitlementId], references: [id], onDelete: SetNull)
+  reviewedBy  User?        @relation(fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([restaurantId, createdAt])
+  @@map("subscription_payments")
+}
+
+/// Where owners send money; edited by administrators. A single row with id 1.
+model PaymentSettings {
+  id                 Int      @id @default(1)
+  instapayAddress    String?  @map("instapay_address") @db.VarChar(100)
+  vodafoneCashNumber String?  @map("vodafone_cash_number") @db.VarChar(20)
+  bankName           String?  @map("bank_name") @db.VarChar(80)
+  bankAccountName    String?  @map("bank_account_name") @db.VarChar(100)
+  bankAccountNumber  String?  @map("bank_account_number") @db.VarChar(40)
+  notesAr            String?  @map("notes_ar") @db.VarChar(500)
+  notesEn            String?  @map("notes_en") @db.VarChar(500)
+  updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("payment_settings")
+}
+
+/// Administrator actions, kept for accountability.
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  action     String   @db.VarChar(60)
+  targetType String   @map("target_type") @db.VarChar(40)
+  targetId   String?  @map("target_id") @db.VarChar(64)
+  metadata   Json?
+  ipAddress  String?  @map("ip_address") @db.VarChar(64)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
+}
+
+/// Sent expiry reminders, so each goes out once per period.
+model ExpiryReminder {
+  id            String   @id @default(uuid()) @db.Uuid
+  restaurantId  String   @map("restaurant_id") @db.Uuid
+  entitlementId String   @map("entitlement_id") @db.Uuid
+  /// Days before the period ends; 0 means it has ended.
+  daysBefore    Int      @map("days_before")
+  sentAt        DateTime @default(now()) @map("sent_at") @db.Timestamptz(3)
+
+  restaurant  Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  entitlement Entitlement @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
+
+  @@unique([entitlementId, daysBefore])
+  @@map("expiry_reminders")
+}
+
+/// A dining table with its own QR code ({publicUrl}/?t={publicCode}).
+model Table {
+  id           String   @id @default(uuid()) @db.Uuid
+  restaurantId String   @map("restaurant_id") @db.Uuid
+  label        String   @db.VarChar(40)
+  /// Random code printed in the table's QR; regenerating it retires printed codes.
+  publicCode   String   @unique @map("public_code") @db.VarChar(16)
+  isActive     Boolean  @default(true) @map("is_active")
+  sortOrder    Int      @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  orders     Order[]
+
+  @@unique([restaurantId, label])
+  @@index([restaurantId, sortOrder])
+  @@map("tables")
+}
+
+enum OrderType {
+  DINE_IN
+  PICKUP
+
+  @@map("order_type")
+}
+
+enum OrderStatus {
+  PLACED
+  ACCEPTED
+  PREPARING
+  READY
+  COMPLETED
+  REJECTED
+  CANCELLED
+
+  @@map("order_status")
+}
+
+/// An order placed by a diner. Names and prices are copied at placement, so menu edits never change it.
+model Order {
+  id               String      @id @default(uuid()) @db.Uuid
+  restaurantId     String      @map("restaurant_id") @db.Uuid
+  /// Daily sequence per restaurant (restaurant time zone): #1, #2, ...
+  number           Int
+  /// The restaurant's local date the number belongs to.
+  businessDay      DateTime    @map("business_day") @db.Date
+  type             OrderType
+  tableId          String?     @map("table_id") @db.Uuid
+  /// Kept even if the table is renamed or deleted.
+  tableLabel       String?     @map("table_label") @db.VarChar(40)
+  customerName     String      @map("customer_name") @db.VarChar(60)
+  customerPhone    String?     @map("customer_phone") @db.VarChar(20)
+  note             String?     @db.VarChar(300)
+  status           OrderStatus @default(PLACED)
+  subtotalPiastres Int         @map("subtotal_piastres")
+  /// Client-generated key; a retried submission returns the same order.
+  idempotencyKey   String      @map("idempotency_key") @db.VarChar(64)
+  rejectionReason  String?     @map("rejection_reason") @db.VarChar(300)
+  placedAt         DateTime    @default(now()) @map("placed_at") @db.Timestamptz(3)
+  acceptedAt       DateTime?   @map("accepted_at") @db.Timestamptz(3)
+  readyAt          DateTime?   @map("ready_at") @db.Timestamptz(3)
+  completedAt      DateTime?   @map("completed_at") @db.Timestamptz(3)
+  closedAt         DateTime?   @map("closed_at") @db.Timestamptz(3)
+  updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  table      Table?      @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  items      OrderItem[]
+
+  @@unique([restaurantId, idempotencyKey])
+  @@unique([restaurantId, businessDay, number])
+  @@index([restaurantId, status, placedAt])
+  @@index([restaurantId, placedAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                String  @id @default(uuid()) @db.Uuid
+  orderId           String  @map("order_id") @db.Uuid
+  /// The menu item, while it still exists; the names and price below are copies.
+  menuItemId        String? @map("menu_item_id") @db.Uuid
+  nameAr            String  @map("name_ar") @db.VarChar(100)
+  nameEn            String? @map("name_en") @db.VarChar(100)
+  variantNameAr     String? @map("variant_name_ar") @db.VarChar(40)
+  variantNameEn     String? @map("variant_name_en") @db.VarChar(40)
+  unitPricePiastres Int     @map("unit_price_piastres")
+  quantity          Int
+  note              String? @db.VarChar(200)
+  sortOrder         Int     @map("sort_order")
+
+  order    Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+/// The last order number used per restaurant and business day.
+model OrderCounter {
+  restaurantId String   @map("restaurant_id") @db.Uuid
+  businessDay  DateTime @map("business_day") @db.Date
+  lastNumber   Int      @map("last_number")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@id([restaurantId, businessDay])
+  @@map("order_counters")
+}
