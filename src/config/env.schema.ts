@@ -46,6 +46,21 @@ export const envSchema = z.object({
       message: 'Must be a URL containing {subdomain}.',
     }),
 
+  /** Where uploaded images are stored: a local directory (served at /media) or S3-compatible storage such as Cloudflare R2. */
+  STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+  /** Local driver only. Defaults to var/media at the repository root. */
+  STORAGE_LOCAL_DIR: z.string().min(1).optional(),
+  /** Base URL that serves stored files, e.g. https://media.bilhanah.com */
+  MEDIA_PUBLIC_URL: z.url().default('http://127.0.0.1:3000/media'),
+  S3_ENDPOINT: z.url().optional(),
+  S3_REGION: z.string().min(1).default('auto'),
+  S3_BUCKET: z.string().min(1).optional(),
+  S3_ACCESS_KEY_ID: z.string().min(1).optional(),
+  S3_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+
+  /** Receives messages from the website's contact form. */
+  CONTACT_INBOX: z.email().default('hello@bilhanah.com'),
+
   SMTP_HOST: z.string().min(1),
   SMTP_PORT: z.coerce.number().int().min(1).max(65535),
   SMTP_SECURE: z.stringbool().default(false),
@@ -56,10 +71,17 @@ export const envSchema = z.object({
 
 export type Env = z.infer<typeof envSchema>;
 
-const envSchemaChecked = envSchema.refine((env) => env.SESSION_MAX_DAYS >= env.REFRESH_TOKEN_TTL_DAYS, {
-  message: 'SESSION_MAX_DAYS must be at least REFRESH_TOKEN_TTL_DAYS.',
-  path: ['SESSION_MAX_DAYS'],
-});
+const envSchemaChecked = envSchema
+  .refine((env) => env.SESSION_MAX_DAYS >= env.REFRESH_TOKEN_TTL_DAYS, {
+    message: 'SESSION_MAX_DAYS must be at least REFRESH_TOKEN_TTL_DAYS.',
+    path: ['SESSION_MAX_DAYS'],
+  })
+  .superRefine((env, context) => {
+    if (env.STORAGE_DRIVER !== 's3') return;
+    for (const key of ['S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'] as const) {
+      if (!env[key]) context.addIssue({ code: 'custom', path: [key], message: 'Required when STORAGE_DRIVER is s3.' });
+    }
+  });
 
 export function validateEnv(raw: Record<string, unknown>): Env {
   const result = envSchemaChecked.safeParse(raw);

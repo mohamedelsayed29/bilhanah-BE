@@ -1,4 +1,5 @@
-import { resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { defineConfig } from 'vitest/config';
 
 // E2E tests use the local Docker services but an isolated database
@@ -24,6 +25,10 @@ Object.assign(process.env, {
   DASHBOARD_URL: 'http://dashboard.test',
   RESTAURANT_URL_TEMPLATE: 'https://{subdomain}.bilhanah.test',
   JWT_ACCESS_SECRET: 'e2e-test-secret-that-is-at-least-32-characters',
+  STORAGE_DRIVER: 'local',
+  STORAGE_LOCAL_DIR: join(tmpdir(), 'bilhanah-e2e-media'),
+  MEDIA_PUBLIC_URL: 'http://api.test/media',
+  CONTACT_INBOX: 'hello@bilhanah.test',
 });
 
 export default defineConfig({

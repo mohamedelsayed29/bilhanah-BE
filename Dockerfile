@@ -26,15 +26,18 @@ WORKDIR /app/packages/database
 CMD ["npx", "prisma", "migrate", "deploy"]
 
 # Only the API's workspaces: npm ci ignores -w filters, so the web manifest is
-# left out to keep its dependencies out. --omit=optional drops the Prisma CLI
-# and TypeScript, which @prisma/client lists as optional peers.
+# left out to keep its dependencies out. Packages the lockfile marks
+# devOptional (the Prisma CLI, Studio and TypeScript, which @prisma/client
+# lists as optional peers) are then removed. --omit=optional is not used
+# because sharp's native binaries are optional dependencies.
 FROM base AS prod-deps
 COPY package.json package-lock.json ./
 COPY packages/config/package.json packages/config/
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/database/package.json packages/database/
 COPY apps/api/package.json apps/api/
-RUN npm ci --ignore-scripts --omit=dev --omit=optional
+RUN npm ci --ignore-scripts --omit=dev \
+ && node -e "const fs=require('fs');const p=require('./package-lock.json').packages;for(const[k,v]of Object.entries(p))if(v.devOptional&&k.startsWith('node_modules/'))fs.rmSync(k,{recursive:true,force:true})"
 
 FROM base AS runtime
 ENV NODE_ENV=production

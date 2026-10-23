@@ -103,6 +103,34 @@ Rules:
 - Access is computed at request time from `entitlements` (`src/modules/subscriptions/access.ts`). Manual suspension overrides any entitlement.
 - Plans and trial defaults are reference data inserted by migration: Menu EGP 200, Orders EGP 350 and Advanced EGP 500, stored in piastres.
 
+## Menus and images
+
+Owner routes need `Authorization: Bearer` and act only on the caller's restaurant; ids from other restaurants answer 404. Editing stays available while the subscription is inactive; only the public menu pauses. Schemas: `packages/contracts/src/menus.ts`, `media.ts`.
+
+| Route | Result |
+| --- | --- |
+| `POST /media?kind=ITEM\|LOGO\|COVER` | multipart `file` (JPEG/PNG/WebP, max 5 MB, min 200 px). 201 `ImageSet`: WebP renditions for `srcset`. The original is not kept, so camera metadata and GPS never reach storage |
+| `GET /menu` | The full menu, hidden entries included |
+| `POST /menu/categories`, `PATCH`/`DELETE /menu/categories/:id` | Deleting a category deletes its items |
+| `PUT /menu/categories/order` `{ ids }` | The complete new order (400 `ORDER_MISMATCH` otherwise) |
+| `POST /menu/items`, `PATCH`/`DELETE /menu/items/:id` | `variants` (sizes) replace the item's list; one unnamed price, or named sizes. `isAvailable: false` = sold out |
+| `PUT /menu/categories/:id/items/order` `{ ids }` | Order within a category |
+| `PATCH /restaurants/mine` | Also `logoId`, `coverId` (images of that kind), `brandColor`, `openingHours` |
+
+Limits: 50 categories, 500 items, 10 sizes per item; prices are piastres up to EGP 100,000.
+
+Public, no auth, `Access-Control-Allow-Origin: *`:
+
+| Route | Result |
+| --- | --- |
+| `GET /public/restaurants/:subdomain/menu` | `{ restaurant, categories }`: visible items (sold-out included), empty categories omitted. `categories` is empty while the restaurant is unavailable |
+| `GET /public/plans` | Plan prices and features |
+| `POST /public/contact` | Website contact form; goes to `CONTACT_INBOX` (5 per hour per IP) |
+
+The public menu is cached in Redis under the restaurant's `menuVersion`, which every edit increments in the same transaction, so changes appear immediately. Images unused for a day are deleted by the worker.
+
+Images are stored with `STORAGE_DRIVER=local` (in `var/media`, served at `/media`) or `s3` (Cloudflare R2 in production); see `.env.example`.
+
 ## Provisioning an administrator
 
 ```bash

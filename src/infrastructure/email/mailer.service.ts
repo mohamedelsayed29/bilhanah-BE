@@ -9,6 +9,7 @@ const ENQUEUE_TIMEOUT_MS = 2_000;
 
 export type EmailMessage = {
   to: string;
+  replyTo?: string;
   subject: string;
   text: string;
   html: string;

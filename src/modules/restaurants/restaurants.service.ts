@@ -4,20 +4,28 @@ import {
   AUTH_ERROR_CODES,
   type createRestaurantSchema,
   normalizeSubdomain,
+  type OpeningHours,
   type OwnerRestaurant,
+  type PublicMenuResponse,
   type PublicRestaurant,
+  type RestaurantBranding,
   RESTAURANT_ERROR_CODES,
   type SubdomainAvailability,
   subdomainProblem,
   type updateRestaurantSchema,
 } from '@bilhanah/contracts';
-import type { Restaurant } from '@bilhanah/database';
+import { Prisma } from '@bilhanah/database';
 import type { z } from 'zod';
 import type { Env } from '../../config/env.schema.js';
 import { isUniqueViolation } from '../../infrastructure/database/prisma-errors.js';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
+import { MediaService } from '../media/media.service.js';
+import { MenusService } from '../menus/menus.service.js';
 import { hasAccess } from '../subscriptions/access.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
+
+const withBranding = { logo: true, cover: true } satisfies Prisma.RestaurantInclude;
+type RestaurantRow = Prisma.RestaurantGetPayload<{ include: typeof withBranding }>;
 
 const notFound = () =>
   new NotFoundException({ code: RESTAURANT_ERROR_CODES.RESTAURANT_NOT_FOUND, message: 'Restaurant not found.' });
@@ -45,6 +53,8 @@ export class RestaurantsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly subscriptions: SubscriptionsService,
+    private readonly media: MediaService,
+    private readonly menus: MenusService,
     config: ConfigService<Env, true>,
   ) {
     this.urlTemplate = config.get('RESTAURANT_URL_TEMPLATE', { infer: true });
@@ -75,7 +85,7 @@ export class RestaurantsService {
     const now = new Date();
     try {
       const restaurant = await this.prisma.$transaction(async (tx) => {
-        const created = await tx.restaurant.create({ data: { ...input, ownerId } });
+        const created = await tx.restaurant.create({ data: { ...input, ownerId }, include: withBranding });
         await this.subscriptions.startTrial(tx, created.id, now);
         return created;
       });
@@ -89,7 +99,7 @@ export class RestaurantsService {
   }
 
   async findMine(ownerId: string): Promise<OwnerRestaurant> {
-    const restaurant = await this.prisma.restaurant.findUnique({ where: { ownerId } });
+    const restaurant = await this.prisma.restaurant.findUnique({ where: { ownerId }, include: withBranding });
     if (!restaurant) throw notFound();
     return this.toOwnerRestaurant(restaurant);
   }
@@ -103,7 +113,17 @@ export class RestaurantsService {
         message: 'This restaurant is suspended. Please contact Bilhanah support.',
       });
     }
-    const updated = await this.prisma.restaurant.update({ where: { id: restaurant.id }, data: input });
+    if (input.logoId) await this.media.assertUsable(restaurant.id, input.logoId, 'LOGO');
+    if (input.coverId) await this.media.assertUsable(restaurant.id, input.coverId, 'COVER');
+    const { openingHours, ...fields } = input;
+    const updated = await this.prisma.restaurant.update({
+      where: { id: restaurant.id },
+      data: {
+        ...fields,
+        ...(openingHours !== undefined && { openingHours: openingHours ?? Prisma.DbNull }),
+      },
+      include: withBranding,
+    });
     return this.toOwnerRestaurant(updated);
   }
 
@@ -112,11 +132,25 @@ export class RestaurantsService {
    * restaurants return the same neutral "temporarily unavailable" view.
    */
   async findPublic(rawSubdomain: string): Promise<PublicRestaurant> {
+    return (await this.resolvePublic(rawSubdomain)).view;
+  }
+
+  /** The restaurant and its menu in one response, for a diner's phone. */
+  async findPublicMenu(rawSubdomain: string): Promise<PublicMenuResponse> {
+    const { row, view } = await this.resolvePublic(rawSubdomain);
+    if (view.availability !== 'AVAILABLE') return { restaurant: view, categories: [] };
+    return { restaurant: view, categories: await this.menus.publicCategories(row.id, row.menuVersion) };
+  }
+
+  private async resolvePublic(rawSubdomain: string): Promise<{ row: RestaurantRow; view: PublicRestaurant }> {
     const subdomain = normalizeSubdomain(rawSubdomain);
     if (subdomainProblem(subdomain)) throw notFound();
-    const restaurant = await this.prisma.restaurant.findUnique({ where: { subdomain } });
+    const restaurant = await this.prisma.restaurant.findUnique({ where: { subdomain }, include: withBranding });
     if (!restaurant) throw notFound();
+    return { row: restaurant, view: await this.toPublicRestaurant(restaurant) };
+  }
 
+  private async toPublicRestaurant(restaurant: RestaurantRow): Promise<PublicRestaurant> {
     const access = await this.subscriptions.accessFor(restaurant);
     if (!hasAccess(access)) {
       return {
@@ -138,10 +172,22 @@ export class RestaurantsService {
       websiteUrl: restaurant.websiteUrl,
       facebookUrl: restaurant.facebookUrl,
       instagramUrl: restaurant.instagramUrl,
+      timezone: restaurant.timezone,
+      ...this.branding(restaurant),
     };
   }
 
-  private async toOwnerRestaurant(restaurant: Restaurant, now = new Date()): Promise<OwnerRestaurant> {
+  private branding(restaurant: RestaurantRow): RestaurantBranding {
+    return {
+      logo: restaurant.logo ? this.media.toImageSet(restaurant.logo) : null,
+      cover: restaurant.cover ? this.media.toImageSet(restaurant.cover) : null,
+      brandColor: restaurant.brandColor,
+      // Validated by openingHoursSchema on the way in.
+      openingHours: restaurant.openingHours as OpeningHours | null,
+    };
+  }
+
+  private async toOwnerRestaurant(restaurant: RestaurantRow, now = new Date()): Promise<OwnerRestaurant> {
     return {
       id: restaurant.id,
       name: restaurant.name,
@@ -159,6 +205,7 @@ export class RestaurantsService {
       instagramUrl: restaurant.instagramUrl,
       createdAt: restaurant.createdAt.toISOString(),
       access: await this.subscriptions.accessFor(restaurant, now),
+      ...this.branding(restaurant),
     };
   }
 }

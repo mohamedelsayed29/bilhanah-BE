@@ -3,6 +3,8 @@ import { Queue } from 'bullmq';
 import type { Env } from '../src/config/env.schema.js';
 import type { EmailMessage, MailerService } from '../src/infrastructure/email/mailer.service.js';
 import { EMAIL_QUEUE, type EmailJob, queueConnection } from '../src/infrastructure/queues/queues.js';
+import type { StorageService } from '../src/infrastructure/storage/storage.service.js';
+import { MediaService } from '../src/modules/media/media.service.js';
 import { EmailProcessor } from '../src/worker/email.processor.js';
 import { MaintenanceService } from '../src/worker/maintenance.service.js';
 import { createTestApp, type TestApp } from './test-app.js';
@@ -99,5 +101,40 @@ describe('maintenance', () => {
       'owner@koshary.test',
       'recent@koshary.test',
     ]);
+  });
+});
+
+describe('unused image cleanup', () => {
+  it('deletes images nothing uses, once they are old enough', async () => {
+    const owner = await t.prisma.user.create({ data: { email: 'o@koshary.test', passwordHash: 'x', fullName: 'O', emailVerifiedAt: new Date() } });
+    const restaurant = await t.prisma.restaurant.create({
+      data: { ownerId: owner.id, name: 'K', subdomain: 'koshary', contactName: 'K', phone: '0100', city: 'Cairo', address: 'Street' },
+    });
+    const image = (id: string, kind: 'LOGO' | 'ITEM', ageDays: number) =>
+      t.prisma.media.create({
+        data: {
+          id,
+          restaurantId: restaurant.id,
+          kind,
+          storageKey: `restaurants/${restaurant.id}/media/${id}`,
+          width: 400,
+          height: 400,
+          variantWidths: [320, 400],
+          bytes: 1,
+          createdAt: new Date(Date.now() - ageDays * DAY_MS),
+        },
+      });
+    const logo = await image('00000000-0000-4000-8000-000000000001', 'LOGO', 3);
+    await image('00000000-0000-4000-8000-000000000002', 'ITEM', 3);
+    const fresh = await image('00000000-0000-4000-8000-000000000003', 'ITEM', 0);
+    await t.prisma.restaurant.update({ where: { id: restaurant.id }, data: { logoId: logo.id } });
+
+    const deleted: string[] = [];
+    const storage = { deletePrefix: async (prefix: string) => void deleted.push(prefix) } as unknown as StorageService;
+    const purged = await new MediaService(t.prisma, storage).purgeUnused(new Date(Date.now() - DAY_MS));
+
+    expect(purged).toBe(1);
+    expect(deleted).toEqual([`restaurants/${restaurant.id}/media/00000000-0000-4000-8000-000000000002`]);
+    expect((await t.prisma.media.findMany()).map((m) => m.id).sort()).toEqual([logo.id, fresh.id].sort());
   });
 });
