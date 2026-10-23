@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { type Language, languageSchema } from './common.js';
+import type { ImageSet } from './media.js';
+import type { PublicMenuCategory } from './menus.js';
+import { type OpeningHours, openingHoursSchema } from './opening-hours.js';
 import type { RestaurantAccess } from './plans.js';
 
 export const RESTAURANT_ERROR_CODES = {
@@ -117,7 +120,25 @@ export const updateRestaurantSchema = z.strictObject({
   websiteUrl: optionalUrlSchema,
   facebookUrl: optionalUrlSchema,
   instagramUrl: optionalUrlSchema,
+  /** Uploaded images (POST /v1/media with kind LOGO or COVER); null removes. */
+  logoId: z.uuid().nullable().optional(),
+  coverId: z.uuid().nullable().optional(),
+  brandColor: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex color such as #0f5c4c.')
+    .transform((value) => value.toLowerCase())
+    .nullable()
+    .optional(),
+  openingHours: openingHoursSchema.nullable().optional(),
 });
+
+/** Presentation shared by the owner and public views. */
+export type RestaurantBranding = {
+  logo: ImageSet | null;
+  cover: ImageSet | null;
+  brandColor: string | null;
+  openingHours: OpeningHours | null;
+};
 
 export type SubdomainAvailability =
   | { subdomain: string; available: true }
@@ -140,10 +161,10 @@ export type OwnerRestaurant = {
   instagramUrl: string | null;
   createdAt: string;
   access: RestaurantAccess;
-};
+} & RestaurantBranding;
 
 export type PublicRestaurant =
-  | {
+  | ({
       availability: 'AVAILABLE';
       subdomain: string;
       name: string;
@@ -155,5 +176,12 @@ export type PublicRestaurant =
       websiteUrl: string | null;
       facebookUrl: string | null;
       instagramUrl: string | null;
-    }
+      timezone: string;
+    } & RestaurantBranding)
   | { availability: 'TEMPORARILY_UNAVAILABLE'; subdomain: string; name: string; defaultLanguage: Language };
+
+/** Everything a diner's phone needs in one request. `categories` is empty while unavailable. */
+export type PublicMenuResponse = {
+  restaurant: PublicRestaurant;
+  categories: PublicMenuCategory[];
+};
