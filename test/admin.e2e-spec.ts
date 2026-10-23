@@ -127,6 +127,11 @@ describe('administration API', () => {
     expect(byName.body).toMatchObject({ total: 1, items: [{ subdomain: 'abou-tarek', ownerEmail: 'tarek@koshary.test' }] });
     const byEmail = await http().get('/v1/admin/restaurants?query=MONA@').set(auth(token)).expect(200);
     expect(byEmail.body.items.map((r: { subdomain: string }) => r.subdomain)).toEqual(['felfela']);
+    // Digits in a non-phone query must not match phone numbers (both restaurants' phones contain a 1).
+    const bySubdomain = await http().get('/v1/admin/restaurants?query=abou-tarek1').set(auth(token)).expect(200);
+    expect(bySubdomain.body.total).toBe(0);
+    const byPhone = await http().get('/v1/admin/restaurants?query=010 1234').set(auth(token)).expect(200);
+    expect(byPhone.body.total).toBe(2);
     const inactive = await http().get('/v1/admin/restaurants?access=INACTIVE').set(auth(token)).expect(200);
     expect(inactive.body.items.map((r: { subdomain: string }) => r.subdomain)).toEqual(['felfela']);
     const page = await http().get('/v1/admin/restaurants?pageSize=1&page=2').set(auth(token)).expect(200);

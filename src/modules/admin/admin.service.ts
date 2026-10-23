@@ -97,6 +97,9 @@ export class AdminService {
    */
   async restaurants(query: z.output<typeof adminRestaurantsQuerySchema>, now = new Date()): Promise<Paginated<AdminRestaurantRow>> {
     const text = query.query?.trim();
+    // Only a query that looks like a phone number (e.g. "010 1234") searches phones,
+    // so "pay-abc4" does not match every number containing a 4.
+    const phoneDigits = text && /^[\d\s+()-]+$/.test(text) ? text.replace(/\D/g, '') : '';
     const rows = await this.prisma.restaurant.findMany({
       where: text
         ? {
@@ -104,7 +107,7 @@ export class AdminService {
               { name: { contains: text, mode: 'insensitive' } },
               { subdomain: { contains: text.toLowerCase() } },
               { owner: { email: { contains: text.toLowerCase() } } },
-              { phone: { contains: text.replace(/\D/g, '') || text } },
+              ...(phoneDigits.length >= 4 ? [{ phone: { contains: phoneDigits } }] : []),
             ],
           }
         : undefined,

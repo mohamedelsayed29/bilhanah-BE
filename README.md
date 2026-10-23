@@ -82,7 +82,7 @@ Rules the dashboard must follow:
 - Email links put the token in the URL fragment: `/verify-email#token=…` and `/reset-password#token=…`.
 - Protect owner routes in other modules with `@UseGuards(AccessTokenGuard)` and read the caller with `@CurrentAuth()`. The guard also checks that the session is still active and the account is not suspended.
 
-Local email is caught by Mailpit at http://127.0.0.1:8025. The API queues email in Redis and the worker delivers it, retrying failures with backoff for about five minutes; if Redis is unreachable the API sends directly instead. Run `npm run dev:worker` to receive email locally. Administrator login (with MFA) is not implemented yet; administrators are rejected by the owner login.
+Local email is caught by Mailpit at http://127.0.0.1:8025. The API queues email in Redis and the worker delivers it, retrying failures with backoff for about five minutes; if Redis is unreachable the API sends directly instead. Run `npm run dev:worker` to receive email locally. Administrators are rejected by the owner login; they sign in with `POST /auth/admin/login` (see Platform administration).
 
 ## Restaurants and onboarding
 
