@@ -86,6 +86,7 @@ model User {
   passwordResetTokens     PasswordResetToken[]
   restaurant              Restaurant?
   reviewedPayments        SubscriptionPayment[]
+  standOrderEvents        StandOrderEvent[]
   grantedEntitlements     Entitlement[]
   auditLogs               AuditLog[]
 
@@ -186,6 +187,7 @@ model Restaurant {
   tables        Table[]
   orders        Order[]
   orderCounters OrderCounter[]
+  dailyStats    RestaurantDailyStat[]
 
   @@map("restaurants")
 }
@@ -337,16 +339,22 @@ enum PaymentMethod {
   INSTAPAY
   VODAFONE_CASH
   BANK_TRANSFER
+  /// Card or wallet through Paymob's checkout; confirmed by Paymob's callback.
+  PAYMOB
 
   @@map("payment_method")
 }
 
 enum PaymentStatus {
   PENDING
+  /// An online payment started at Paymob and not finished yet.
+  AWAITING_PAYMENT
   APPROVED
   REJECTED
   /// Withdrawn by the owner before review.
   CANCELLED
+  /// Declined by Paymob.
+  FAILED
 
   @@map("payment_status")
 }
@@ -371,6 +379,9 @@ model SubscriptionPayment {
   reviewedById    String?       @map("reviewed_by_id") @db.Uuid
   reviewedAt      DateTime?     @map("reviewed_at") @db.Timestamptz(3)
   rejectionReason String?       @map("rejection_reason") @db.VarChar(300)
+  /// Online payments: Paymob's order and the transaction that paid it.
+  paymobOrderId       String?   @map("paymob_order_id") @db.VarChar(40)
+  paymobTransactionId String?   @unique @map("paymob_transaction_id") @db.VarChar(40)
   createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -563,4 +574,154 @@ model PushSubscription {
   @@unique([orderId, endpoint])
   @@index([createdAt])
   @@map("push_subscriptions")
+}
+
+// --- Stand shop ---------------------------------------------------------------
+
+enum StandOrderStatus {
+  /// Online order whose payment is not finished; cancelled after two days.
+  AWAITING_PAYMENT
+  NEW
+  CONFIRMED
+  IN_PRODUCTION
+  SHIPPED
+  DELIVERED
+  CANCELLED
+
+  @@map("stand_order_status")
+}
+
+enum StandPaymentMethod {
+  CASH_ON_DELIVERY
+  PAYMOB
+
+  @@map("stand_payment_method")
+}
+
+enum StandPaymentStatus {
+  UNPAID
+  PAID
+
+  @@map("stand_payment_status")
+}
+
+/// What the stand-shop checkout offers; edited by administrators. A single row with id 1.
+model ShopSettings {
+  id                  Int      @id @default(1)
+  /// Flat delivery fee; null when it is confirmed by phone.
+  deliveryFeePiastres Int?     @map("delivery_fee_piastres")
+  cashOnDelivery      Boolean  @default(true) @map("cash_on_delivery")
+  onlinePayment       Boolean  @default(true) @map("online_payment")
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("shop_settings")
+}
+
+/// A logo uploaded at checkout. Unused ones are deleted after two days.
+model StandLogo {
+  id         String   @id @default(uuid()) @db.Uuid
+  storageKey String   @map("storage_key") @db.VarChar(200)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  lines StandOrderLine[]
+
+  @@index([createdAt])
+  @@map("stand_logos")
+}
+
+/// An order from the stand shop; customers need no account.
+model StandOrder {
+  id                  String             @id @default(uuid()) @db.Uuid
+  /// Shown as "S-<number>".
+  number              Int                @unique @default(autoincrement())
+  status              StandOrderStatus
+  paymentMethod       StandPaymentMethod @map("payment_method")
+  paymentStatus       StandPaymentStatus @default(UNPAID) @map("payment_status")
+  paidAt              DateTime?          @map("paid_at") @db.Timestamptz(3)
+  customerName        String             @map("customer_name") @db.VarChar(80)
+  phone               String             @db.VarChar(20)
+  email               String?            @db.VarChar(254)
+  city                String             @db.VarChar(60)
+  address             String             @db.VarChar(300)
+  customerNotes       String?            @map("customer_notes") @db.VarChar(500)
+  adminNote           String?            @map("admin_note") @db.VarChar(1000)
+  language            Language           @default(ar)
+  subtotalPiastres    Int                @map("subtotal_piastres")
+  /// Null when the fee is confirmed by phone.
+  deliveryFeePiastres Int?               @map("delivery_fee_piastres")
+  totalPiastres       Int                @map("total_piastres")
+  /// Client-generated; a retried checkout returns the same order.
+  idempotencyKey      String             @unique @map("idempotency_key") @db.VarChar(64)
+  paymobOrderId       String?            @map("paymob_order_id") @db.VarChar(40)
+  paymobTransactionId String?            @unique @map("paymob_transaction_id") @db.VarChar(40)
+  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  lines  StandOrderLine[]
+  events StandOrderEvent[]
+
+  @@index([status, createdAt])
+  @@index([createdAt])
+  @@map("stand_orders")
+}
+
+model StandOrderLine {
+  id                String  @id @default(uuid()) @db.Uuid
+  orderId           String  @map("order_id") @db.Uuid
+  sortOrder         Int     @map("sort_order")
+  shape             String  @db.VarChar(20)
+  nfc               Boolean
+  design            String  @db.VarChar(20)
+  customBackground  String? @map("custom_background") @db.VarChar(7)
+  customInk         String? @map("custom_ink") @db.VarChar(7)
+  purpose           String  @db.VarChar(20)
+  brand             String  @db.VarChar(35)
+  caption           String  @db.VarChar(60)
+  url               String  @db.VarChar(2048)
+  logoId            String? @map("logo_id") @db.Uuid
+  numbered          Boolean
+  startNumber       Int     @map("start_number")
+  quantity          Int
+  notes             String  @db.VarChar(300)
+  unitPricePiastres Int     @map("unit_price_piastres")
+
+  order StandOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  logo  StandLogo? @relation(fields: [logoId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, sortOrder])
+  @@map("stand_order_lines")
+}
+
+/// The order's history: every status change, by whom (null: the customer, Paymob or the system).
+model StandOrderEvent {
+  id        String           @id @default(uuid()) @db.Uuid
+  orderId   String           @map("order_id") @db.Uuid
+  status    StandOrderStatus
+  note      String?          @db.VarChar(300)
+  actorId   String?          @map("actor_id") @db.Uuid
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order StandOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  actor User?      @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, createdAt])
+  @@map("stand_order_events")
+}
+
+// --- Analytics ----------------------------------------------------------------
+
+/// Menu visits per restaurant and day (restaurant time zone), copied from Redis counters by the worker.
+model RestaurantDailyStat {
+  restaurantId String   @map("restaurant_id") @db.Uuid
+  day          DateTime @db.Date
+  visits       Int      @default(0)
+  qrVisits     Int      @default(0) @map("qr_visits")
+  tableVisits  Int      @default(0) @map("table_visits")
+  linkVisits   Int      @default(0) @map("link_visits")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@id([restaurantId, day])
+  @@index([day])
+  @@map("restaurant_daily_stats")
 }

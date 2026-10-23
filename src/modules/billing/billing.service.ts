@@ -1,4 +1,5 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomBytes } from 'node:crypto';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   type AdminEntitlement,
@@ -6,12 +7,15 @@ import {
   BILLING_MONTHS,
   type BillingSummary,
   type grantEntitlementSchema,
+  MANUAL_PAYMENT_METHODS,
+  type ManualPaymentMethod,
+  type OnlineCheckout,
   type OwnerPayment,
-  PAYMENT_METHODS,
   type PaymentInstructions,
-  type PaymentMethod,
   PLAN_FEATURES,
+  PLAN_NAMES,
   RESTAURANT_ERROR_CODES,
+  type startOnlinePaymentSchema,
   type submitPaymentSchema,
 } from '@bilhanah/contracts';
 import type { Entitlement, PaymentSettings, Prisma, SubscriptionPayment } from '@bilhanah/database';
@@ -20,11 +24,13 @@ import type { Env } from '../../config/env.schema.js';
 import { isUniqueViolation } from '../../infrastructure/database/prisma-errors.js';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { MailerService } from '../../infrastructure/email/mailer.service.js';
+import { PaymobError, PaymobService, type PaymobTransaction } from '../../infrastructure/paymob/paymob.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { MediaService } from '../media/media.service.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
 import {
   newPaymentAdminEmail,
+  onlinePaymentReceivedEmail,
   paymentApprovedEmail,
   paymentReceivedEmail,
   paymentRejectedEmail,
@@ -39,8 +45,8 @@ const paymentNotFound = () =>
 const notPending = () =>
   new ConflictException({ code: BILLING_ERROR_CODES.PAYMENT_NOT_PENDING, message: 'This payment has already been handled.' });
 
-/** Which details make a payment method usable. */
-const METHOD_DETAILS: Record<PaymentMethod, (settings: PaymentSettings) => boolean> = {
+/** Which details make a transfer method usable. */
+const METHOD_DETAILS: Record<ManualPaymentMethod, (settings: PaymentSettings) => boolean> = {
   INSTAPAY: (settings) => !!settings.instapayAddress,
   VODAFONE_CASH: (settings) => !!settings.vodafoneCashNumber,
   BANK_TRANSFER: (settings) => !!settings.bankAccountNumber && !!settings.bankName,
@@ -78,12 +84,27 @@ export function toOwnerPayment(payment: PaymentRow): OwnerPayment {
   };
 }
 
+/** Online payments carry this prefix in Paymob's merchant_order_id; the stand shop uses "stand-". */
+export const SUBSCRIPTION_REFERENCE_PREFIX = 'sub-';
+
+/** A unique reference per checkout attempt: Paymob refuses to reuse one. */
+export const paymobReference = (prefix: string, id: string) => `${prefix}${id}-${randomBytes(3).toString('hex')}`;
+
+/** The id inside a reference made by paymobReference, if it has the prefix. */
+export function idFromPaymobReference(prefix: string, reference: string | null): string | null {
+  if (!reference?.startsWith(prefix)) return null;
+  const id = reference.slice(prefix.length, prefix.length + 36);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) ? id : null;
+}
+
 /**
- * Subscriptions paid by manual transfer: owners submit the transfer details,
- * an administrator approves (creating a paid period) or rejects them.
+ * Subscriptions paid by manual transfer (owners submit the transfer details,
+ * an administrator approves, creating a paid period, or rejects them) or
+ * online with Paymob (confirmed by Paymob's signed callback).
  */
 @Injectable()
 export class BillingService {
+  private readonly logger = new Logger(BillingService.name);
   private readonly dashboardUrl: string;
 
   constructor(
@@ -92,6 +113,7 @@ export class BillingService {
     private readonly media: MediaService,
     private readonly audit: AuditService,
     private readonly mailer: MailerService,
+    private readonly paymob: PaymobService,
     config: ConfigService<Env, true>,
   ) {
     this.dashboardUrl = config.get('DASHBOARD_URL', { infer: true }).replace(/\/$/, '');
@@ -118,7 +140,8 @@ export class BillingService {
       plans: plans.map((plan) => ({ code: plan.code, priceMonthlyPiastres: plan.priceMonthlyPiastres, features: PLAN_FEATURES[plan.code] })),
       months: BILLING_MONTHS,
       instructions: toInstructions(settings),
-      availableMethods: PAYMENT_METHODS.filter((method) => METHOD_DETAILS[method](settings)),
+      availableMethods: MANUAL_PAYMENT_METHODS.filter((method) => METHOD_DETAILS[method](settings)),
+      onlinePayment: this.paymob.configured,
       nextPeriodStartsAt: nextPeriodStart(entitlements, now).toISOString(),
       pendingPayment: ownerPayments.find((payment) => payment.status === 'PENDING') ?? null,
       payments: ownerPayments,
@@ -170,6 +193,154 @@ export class BillingService {
       this.mailer.sendInBackground(newPaymentAdminEmail(admin, restaurant, payment, this.dashboardUrl), 'payment-admin-alert');
     }
     return toOwnerPayment(payment);
+  }
+
+  /**
+   * Starts a Paymob checkout for a plan. The paid period is created when
+   * Paymob confirms the payment (settleOnline), not when the owner returns.
+   */
+  async startOnline(ownerId: string, input: z.output<typeof startOnlinePaymentSchema>): Promise<OnlineCheckout> {
+    const restaurant = await this.restaurantFor(ownerId, { forWrite: true });
+    if (!this.paymob.configured) {
+      throw new ConflictException({
+        code: BILLING_ERROR_CODES.ONLINE_PAYMENT_UNAVAILABLE,
+        message: 'Online payment is not available right now.',
+        details: { reason: 'NOT_CONFIGURED' },
+      });
+    }
+    const plan = await this.prisma.plan.findUniqueOrThrow({ where: { code: input.planCode } });
+    // One checkout at a time: an earlier unfinished one is abandoned (Paymob may still confirm it; then it counts).
+    await this.prisma.subscriptionPayment.updateMany({
+      where: { restaurantId: restaurant.id, status: 'AWAITING_PAYMENT' },
+      data: { status: 'CANCELLED' },
+    });
+    const payment = await this.prisma.subscriptionPayment.create({
+      data: {
+        restaurantId: restaurant.id,
+        planCode: input.planCode,
+        months: input.months,
+        amountPiastres: plan.priceMonthlyPiastres * input.months,
+        method: 'PAYMOB',
+        status: 'AWAITING_PAYMENT',
+        reference: 'Paymob',
+      },
+    });
+
+    const [firstName, ...rest] = restaurant.owner.fullName.trim().split(/\s+/);
+    try {
+      const checkout = await this.paymob.createCheckout({
+        reference: paymobReference(SUBSCRIPTION_REFERENCE_PREFIX, payment.id),
+        amountPiastres: payment.amountPiastres,
+        description: `Bilhanah ${PLAN_NAMES[input.planCode].en} · ${input.months} month${input.months === 1 ? '' : 's'}`,
+        billing: { firstName: firstName ?? '', lastName: rest.join(' '), email: restaurant.owner.email, phone: restaurant.phone, city: restaurant.city },
+        redirectionUrl: `${this.dashboardUrl}/subscription?payment=${payment.id}`,
+      });
+      await this.prisma.subscriptionPayment.update({ where: { id: payment.id }, data: { paymobOrderId: checkout.paymobOrderId } });
+      return { paymentId: payment.id, checkoutUrl: checkout.checkoutUrl };
+    } catch (error) {
+      if (!(error instanceof PaymobError)) throw error;
+      this.logger.warn({ err: error, paymentId: payment.id }, 'Could not start a Paymob checkout');
+      await this.prisma.subscriptionPayment.update({
+        where: { id: payment.id },
+        data: { status: 'FAILED', rejectionReason: 'The payment page could not be opened.' },
+      });
+      throw new ConflictException({
+        code: BILLING_ERROR_CODES.ONLINE_PAYMENT_UNAVAILABLE,
+        message: 'The payment page could not be opened. Try again in a moment, or pay by transfer.',
+        details: { reason: 'PROVIDER_ERROR' },
+      });
+    }
+  }
+
+  /**
+   * Applies a signed Paymob transaction to its payment. A success creates the
+   * paid period (also for a checkout the owner had abandoned: the money is
+   * real); a decline marks the payment FAILED. Safe to receive twice.
+   */
+  async settleOnline(paymentId: string, transaction: PaymobTransaction): Promise<void> {
+    const payment = await this.prisma.subscriptionPayment.findUnique({ where: { id: paymentId } });
+    if (!payment || payment.method !== 'PAYMOB') {
+      this.logger.warn({ paymentId, transactionId: transaction.id }, 'Paymob callback for an unknown payment');
+      return;
+    }
+    if (transaction.pending) return;
+    if (transaction.refunded || transaction.voided) {
+      await this.audit.record({
+        actorId: null,
+        action: transaction.refunded ? 'payment.paymob.refunded' : 'payment.paymob.voided',
+        targetType: 'payment',
+        targetId: paymentId,
+        metadata: { transactionId: transaction.id, amountPiastres: transaction.amountPiastres, status: payment.status },
+      });
+      return;
+    }
+    if (!transaction.success) {
+      await this.prisma.subscriptionPayment.updateMany({
+        where: { id: paymentId, status: 'AWAITING_PAYMENT' },
+        data: { status: 'FAILED', rejectionReason: 'Declined by Paymob.', paymobOrderId: transaction.paymobOrderId || undefined },
+      });
+      return;
+    }
+    if (transaction.amountPiastres !== payment.amountPiastres || transaction.currency !== 'EGP') {
+      this.logger.error({ paymentId, transactionId: transaction.id, paid: transaction.amountPiastres, expected: payment.amountPiastres }, 'Paymob amount mismatch');
+      await this.audit.record({
+        actorId: null,
+        action: 'payment.paymob.mismatch',
+        targetType: 'payment',
+        targetId: paymentId,
+        metadata: { transactionId: transaction.id, paid: transaction.amountPiastres, currency: transaction.currency, expected: payment.amountPiastres },
+      });
+      return;
+    }
+    if (payment.paymobTransactionId === transaction.id) return;
+    if (payment.status === 'APPROVED') {
+      // Paid twice for the same checkout: needs a refund by hand.
+      await this.audit.record({
+        actorId: null,
+        action: 'payment.paymob.duplicate',
+        targetType: 'payment',
+        targetId: paymentId,
+        metadata: { transactionId: transaction.id, amountPiastres: transaction.amountPiastres },
+      });
+      return;
+    }
+
+    const now = new Date();
+    const settled = await this.prisma.$transaction(async (tx) => {
+      await lockRestaurant(tx, payment.restaurantId);
+      const claimed = await tx.subscriptionPayment.updateMany({
+        where: { id: paymentId, status: { in: ['AWAITING_PAYMENT', 'CANCELLED', 'FAILED'] } },
+        data: {
+          status: 'APPROVED',
+          reviewedAt: now,
+          reference: `Paymob ${transaction.id}`,
+          paymobTransactionId: transaction.id,
+          paymobOrderId: transaction.paymobOrderId || undefined,
+          rejectionReason: null,
+        },
+      });
+      if (claimed.count !== 1) return null;
+      const entitlement = await this.createPaidPeriod(tx, payment.restaurantId, payment.planCode, payment.months, now);
+      const updated = await tx.subscriptionPayment.update({
+        where: { id: paymentId },
+        data: { entitlementId: entitlement.id },
+        include: { entitlement: { select: { startsAt: true, endsAt: true } } },
+      });
+      await this.audit.record(
+        {
+          actorId: null,
+          action: 'payment.paymob',
+          targetType: 'payment',
+          targetId: paymentId,
+          metadata: { restaurantId: payment.restaurantId, planCode: payment.planCode, months: payment.months, transactionId: transaction.id, endsAt: entitlement.endsAt.toISOString() },
+        },
+        tx,
+      );
+      return { payment: updated, period: entitlement };
+    });
+    if (!settled) return;
+    const owner = await this.ownerOf(payment.restaurantId);
+    this.mailer.sendInBackground(onlinePaymentReceivedEmail(owner, settled.payment, settled.period, this.dashboardUrl), 'payment-online');
   }
 
   /** Withdraws the owner's own payment while it is still waiting for review. */

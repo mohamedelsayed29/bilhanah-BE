@@ -7,18 +7,22 @@ import { DatabaseModule } from './infrastructure/database/database.module.js';
 import { EmailModule } from './infrastructure/email/email.module.js';
 import { AppLoggerModule } from './infrastructure/observability/logger.module.js';
 import { ObservabilityModule } from './infrastructure/observability/observability.module.js';
+import { PaymobModule } from './infrastructure/paymob/paymob.module.js';
 import { PushModule } from './infrastructure/push/push.module.js';
 import { QueuesModule } from './infrastructure/queues/queues.module.js';
 import { RedisModule } from './infrastructure/redis/redis.module.js';
 import { StorageModule } from './infrastructure/storage/storage.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
+import { AnalyticsModule } from './modules/analytics/analytics.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { BillingModule } from './modules/billing/billing.module.js';
 import { ContactModule } from './modules/contact/contact.module.js';
 import { MediaModule } from './modules/media/media.module.js';
 import { MenusModule } from './modules/menus/menus.module.js';
 import { OrdersModule } from './modules/orders/orders.module.js';
+import { PaymentsModule } from './modules/payments/payments.module.js';
 import { PwaModule } from './modules/pwa/pwa.module.js';
+import { ShopModule } from './modules/shop/shop.module.js';
 import { PlansModule } from './modules/plans/plans.module.js';
 import { RestaurantsModule } from './modules/restaurants/restaurants.module.js';
 import { TablesModule } from './modules/tables/tables.module.js';
@@ -32,6 +36,7 @@ import { TablesModule } from './modules/tables/tables.module.js';
     RedisModule,
     QueuesModule,
     PushModule,
+    PaymobModule,
     StorageModule,
     EmailModule,
     ObservabilityModule,
@@ -46,6 +51,9 @@ import { TablesModule } from './modules/tables/tables.module.js';
     TablesModule,
     OrdersModule,
     PwaModule,
+    ShopModule,
+    PaymentsModule,
+    AnalyticsModule,
   ],
   providers: [{ provide: APP_FILTER, useClass: AllExceptionsFilter }],
 })

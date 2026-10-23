@@ -81,6 +81,28 @@ export const envSchema = z.object({
   VAPID_PRIVATE_KEY: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'A P-256 private key, base64url (43 characters).').optional(),
   /** Push services contact this if our messages misbehave: mailto: or https: */
   VAPID_SUBJECT: z.string().regex(/^(mailto:|https:\/\/)/).default('mailto:hello@bilhanah.com'),
+
+  /** The marketing site, where stand-shop customers return from Paymob. */
+  WEBSITE_URL: z.url().default('https://bilhanah.com'),
+  /** This API's public origin (e.g. https://api.bilhanah.com), for Paymob's payment callbacks. */
+  API_PUBLIC_URL: z.url().optional(),
+
+  /**
+   * Online payments with Paymob (Dashboard → Settings / Developers). Without
+   * them, owners pay by transfer and the shop takes cash on delivery only.
+   */
+  PAYMOB_SECRET_KEY: z.string().min(10).optional(),
+  PAYMOB_PUBLIC_KEY: z.string().min(10).optional(),
+  PAYMOB_HMAC_SECRET: z.string().min(10).optional(),
+  /** Integration ids to offer at checkout, comma-separated (e.g. card and wallet). */
+  PAYMOB_INTEGRATION_IDS: z
+    .string()
+    .regex(/^\d+(\s*,\s*\d+)*$/, 'Comma-separated integration ids.')
+    .transform((value) => value.split(',').map((id) => Number(id.trim())))
+    .optional(),
+  PAYMOB_API_URL: z.url().default('https://accept.paymob.com'),
+  /** Paymob's hosted checkout; publicKey and clientSecret are added as query parameters. */
+  PAYMOB_CHECKOUT_URL: z.url().default('https://eg.checkout.paymob.com/'),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -89,6 +111,13 @@ const envSchemaChecked = envSchema
   .refine((env) => env.SESSION_MAX_DAYS >= env.REFRESH_TOKEN_TTL_DAYS, {
     message: 'SESSION_MAX_DAYS must be at least REFRESH_TOKEN_TTL_DAYS.',
     path: ['SESSION_MAX_DAYS'],
+  })
+  .superRefine((env, context) => {
+    const paymob = ['PAYMOB_SECRET_KEY', 'PAYMOB_PUBLIC_KEY', 'PAYMOB_HMAC_SECRET', 'PAYMOB_INTEGRATION_IDS', 'API_PUBLIC_URL'] as const;
+    if (!paymob.slice(0, 4).some((key) => env[key])) return;
+    for (const key of paymob) {
+      if (!env[key]) context.addIssue({ code: 'custom', path: [key], message: 'Required with the other PAYMOB_* settings.' });
+    }
   })
   .refine((env) => !env.VAPID_PUBLIC_KEY === !env.VAPID_PRIVATE_KEY, {
     message: 'Set both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY, or neither.',

@@ -63,8 +63,9 @@ export async function createTestApp(): Promise<TestApp> {
     mailer,
     prisma,
     reset: async () => {
-      // Cascades to sessions, tokens, restaurants and entitlements.
-      await prisma.$executeRawUnsafe('TRUNCATE TABLE users, audit_logs CASCADE');
+      // Cascades to sessions, tokens, restaurants and entitlements; the stand shop has no owner.
+      await prisma.$executeRawUnsafe('TRUNCATE TABLE users, audit_logs, stand_orders, stand_logos CASCADE');
+      await prisma.shopSettings.update({ where: { id: 1 }, data: { deliveryFeePiastres: null, cashOnDelivery: true, onlinePayment: true } });
       await prisma.paymentSettings.update({
         where: { id: 1 },
         data: { instapayAddress: null, vodafoneCashNumber: null, bankName: null, bankAccountName: null, bankAccountNumber: null, notesAr: null, notesEn: null },

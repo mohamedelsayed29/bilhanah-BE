@@ -4,8 +4,10 @@ import { Queue, Worker } from 'bullmq';
 import type { Env } from '../config/env.schema.js';
 import { MAINTENANCE_QUEUE, queueConnection } from '../infrastructure/queues/queues.js';
 import { ExpiryRemindersService } from '../modules/billing/expiry-reminders.service.js';
+import { VisitsService } from '../modules/analytics/visits.service.js';
 import { MediaService } from '../modules/media/media.service.js';
 import { MaintenanceService } from './maintenance.service.js';
+import { ShopMaintenanceService } from './shop-maintenance.service.js';
 
 const PURGE_EXPIRED = 'purge-expired';
 const HOUR_MS = 60 * 60 * 1000;
@@ -21,6 +23,8 @@ export class MaintenanceProcessor implements OnApplicationBootstrap, OnApplicati
     private readonly maintenance: MaintenanceService,
     private readonly media: MediaService,
     private readonly reminders: ExpiryRemindersService,
+    private readonly shop: ShopMaintenanceService,
+    private readonly visits: VisitsService,
     private readonly config: ConfigService<Env, true>,
   ) {}
 
@@ -40,8 +44,11 @@ export class MaintenanceProcessor implements OnApplicationBootstrap, OnApplicati
         const result = await this.maintenance.purgeExpired();
         // Uploads get a day to be attached to an item or the restaurant.
         const images = await this.media.purgeUnused(new Date(Date.now() - 24 * HOUR_MS));
-        this.logger.log({ ...result, unusedImages: images }, 'Purged expired records');
+        const shop = await this.shop.run();
+        this.logger.log({ ...result, unusedImages: images, ...shop }, 'Purged expired records');
         await this.reminders.sendDue();
+        // Visit counters, Redis to Postgres.
+        await this.visits.flush();
       },
       { connection },
     );

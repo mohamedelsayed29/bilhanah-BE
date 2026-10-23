@@ -54,6 +54,12 @@ docker run --rm -v "$PWD/scripts:/s:ro" node:24-slim node /s/generate-vapid-keys
 
 Fill in every value. Secrets are generated fresh for production, never copied from development. `DATA_ENCRYPTION_KEY` must never change after the first administrator is created, and the VAPID pair must never change once diners have turned on notifications. Email needs a transactional provider (Resend, Postmark or Amazon SES) with SPF/DKIM set up for the sending domain.
 
+### Online payments (optional)
+
+To take card and wallet payments, open a Paymob account and copy from its dashboard the secret key, public key, HMAC secret and the integration ids (card, mobile wallet) into `PAYMOB_*` in `infra/.env.prod`, with `API_PUBLIC_URL=https://api.bilhanah.com`. Nothing else is configured in Paymob: every checkout tells Paymob where to send its callback. Try it first with Paymob's test integration ids and test cards, then switch to the live keys. In the admin console, set a stand-shop delivery fee to offer online payment in the shop.
+
+Watch the audit log for `payment.paymob.mismatch`, `.duplicate`, `.refunded` (and the `stand-order.paymob.*` equivalents): those need a person.
+
 ## 4. Deploy (first time and every release)
 
 ```bash

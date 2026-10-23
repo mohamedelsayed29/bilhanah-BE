@@ -42,6 +42,10 @@ if ! grep -q '^VAPID_PUBLIC_KEY=' .env; then
   step "Adding Web Push keys to .env"
   { printf '\n# Web Push (order-ready alerts). Keep them: new keys orphan existing subscriptions.\n'; node scripts/generate-vapid-keys.mjs; } >> .env
 fi
+# Stand-shop customers return here from online payments; older .env files get it too.
+if ! grep -q '^WEBSITE_URL=' .env; then
+  printf '\n# The website (stand-shop orders return here from Paymob).\nWEBSITE_URL=http://127.0.0.1:%s\n' "$WEB_PORT" >> .env
+fi
 API_PORT="$(sed -n 's/^PORT=//p' .env | tail -1)"
 API_PORT="${API_PORT:-3000}"
 

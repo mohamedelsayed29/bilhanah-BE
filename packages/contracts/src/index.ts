@@ -12,3 +12,7 @@ export * from './billing.js';
 export * from './admin.js';
 export * from './orders.js';
 export * from './push.js';
+export * from './shop.js';
+export * from './shop-orders.js';
+export * from './analytics.js';
+export * from './analytics-schemas.js';

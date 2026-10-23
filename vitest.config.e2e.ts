@@ -38,6 +38,15 @@ Object.assign(process.env, {
   VAPID_PUBLIC_KEY: 'BAfI8Tl9_-bPlhQIo7Mgxk1GQSgEAaDVUqTTI9kCxL0juiQEsndj7EWoYK9lUcOd0HiOiMD9zET1D5Yx2doIdww',
   VAPID_PRIVATE_KEY: 'W9y_cQ21fMIS6IClYdCWrANBKzgEm2SuG_yxCSXzxV8',
   VAPID_SUBJECT: 'mailto:ops@bilhanah.test',
+  WEBSITE_URL: 'https://bilhanah.test',
+  // Paymob is replaced by a fake server the payment tests start on this port.
+  API_PUBLIC_URL: 'https://api.bilhanah.test',
+  PAYMOB_SECRET_KEY: 'egy_sk_test_e2e_secret',
+  PAYMOB_PUBLIC_KEY: 'egy_pk_test_e2e_public',
+  PAYMOB_HMAC_SECRET: 'e2e-paymob-hmac-secret',
+  PAYMOB_INTEGRATION_IDS: '111,222',
+  PAYMOB_API_URL: 'http://127.0.0.1:59123',
+  PAYMOB_CHECKOUT_URL: 'https://checkout.paymob.test/',
 });
 
 export default defineConfig({

@@ -63,6 +63,25 @@ export function paymentApprovedEmail(owner: Recipient, payment: PaymentFacts, pe
   }, `${dashboardUrl}/subscription`);
 }
 
+export function onlinePaymentReceivedEmail(owner: Recipient, payment: PaymentFacts, period: { startsAt: Date; endsAt: Date }, dashboardUrl: string) {
+  return email(owner, {
+    ar: {
+      subject: 'وصلنا الدفع واشتراكك اتفعّل',
+      greeting: `أهلًا ${owner.fullName}،`,
+      body: [`وصلنا دفعك أونلاين: ${summary(payment, 'ar')}`, `الاشتراك ساري من ${date(period.startsAt, 'ar')} لحد ${date(period.endsAt, 'ar')}. بالهنا!`],
+      action: 'لوحة التحكم',
+      footer: 'شكرًا إنك اخترت بالهنا.',
+    },
+    en: {
+      subject: 'Payment received: your plan is active',
+      greeting: `Hi ${owner.fullName},`,
+      body: [`We received your online payment: ${summary(payment, 'en')}`, `Your plan runs from ${date(period.startsAt, 'en')} to ${date(period.endsAt, 'en')}. Enjoy!`],
+      action: 'Open dashboard',
+      footer: 'Thank you for choosing Bilhanah.',
+    },
+  }, `${dashboardUrl}/subscription`);
+}
+
 export function paymentRejectedEmail(owner: Recipient, payment: PaymentFacts, reason: string, dashboardUrl: string) {
   return email(owner, {
     ar: {

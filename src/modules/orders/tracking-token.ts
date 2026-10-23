@@ -11,8 +11,9 @@ import type { Env } from '../../config/env.schema.js';
 export class TrackingTokens {
   private readonly key: Buffer;
 
-  constructor(keyMaterial: string) {
-    this.key = Buffer.from(hkdfSync('sha256', keyMaterial, 'bilhanah', 'order-tracking:v1', 32));
+  /** `purpose` separates link families: a link of one kind never verifies as another. */
+  constructor(keyMaterial: string, purpose = 'order-tracking:v1') {
+    this.key = Buffer.from(hkdfSync('sha256', keyMaterial, 'bilhanah', purpose, 32));
   }
 
   issue(orderId: string): string {
@@ -43,4 +44,14 @@ export const trackingTokensProvider: FactoryProvider<TrackingTokens> = {
   inject: [ConfigService],
   useFactory: (config: ConfigService<Env, true>) =>
     new TrackingTokens(config.get('DATA_ENCRYPTION_KEY', { infer: true }) ?? config.get('JWT_ACCESS_SECRET', { infer: true })),
+};
+
+/** Stand-shop order links (/shop/orders/<token>): same scheme, separate key. */
+export const STAND_ORDER_TOKENS = Symbol('STAND_ORDER_TOKENS');
+
+export const standOrderTokensProvider: FactoryProvider<TrackingTokens> = {
+  provide: STAND_ORDER_TOKENS,
+  inject: [ConfigService],
+  useFactory: (config: ConfigService<Env, true>) =>
+    new TrackingTokens(config.get('DATA_ENCRYPTION_KEY', { infer: true }) ?? config.get('JWT_ACCESS_SECRET', { infer: true }), 'stand-order:v1'),
 };

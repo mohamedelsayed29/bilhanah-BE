@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Header, HttpCode, HttpStatus, Param, Post, Res, StreamableFile, UseGuards } from '@nestjs/common';
-import { type BillingSummary, type OwnerPayment, paymentIdParamSchema, submitPaymentSchema } from '@bilhanah/contracts';
+import { type BillingSummary, type OnlineCheckout, type OwnerPayment, paymentIdParamSchema, startOnlinePaymentSchema, submitPaymentSchema } from '@bilhanah/contracts';
 import type { Response } from 'express';
 import type { z } from 'zod';
 import { type AuthContext, CurrentAuth } from '../../common/decorators/current-auth.decorator.js';
@@ -39,6 +39,17 @@ export class BillingController {
     @Body(new ZodValidationPipe(submitPaymentSchema)) body: z.output<typeof submitPaymentSchema>,
   ): Promise<OwnerPayment> {
     return this.billing.submit(auth.userId, body);
+  }
+
+  /** Opens a Paymob checkout (card or wallet) for a plan; the owner is sent to checkoutUrl. */
+  @Post('online')
+  @HttpCode(HttpStatus.CREATED)
+  @RateLimit({ name: 'billing-online:ip', limit: 20, windowSeconds: 60 * 60, by: 'ip' })
+  startOnline(
+    @CurrentAuth() auth: AuthContext,
+    @Body(new ZodValidationPipe(startOnlinePaymentSchema)) body: z.output<typeof startOnlinePaymentSchema>,
+  ): Promise<OnlineCheckout> {
+    return this.billing.startOnline(auth.userId, body);
   }
 
   /** Withdraws a payment that has not been reviewed yet. */

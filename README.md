@@ -232,6 +232,43 @@ Receipts are uploaded with `POST /media?kind=PAYMENT_PROOF`. They are stored und
 
 A paid period starts when current coverage ends (so paying during the trial keeps the remaining trial days) or immediately when access has lapsed, and runs for whole calendar months. The worker emails owners 7, 3 and 1 days before a trial or paid period ends and once when it has ended, unless another period follows.
 
+## Online payments (Paymob)
+
+With the `PAYMOB_*` settings (and `API_PUBLIC_URL`), owners can pay for a plan by card or wallet, and stand-shop customers can pay online. Without them, everything works with transfers and cash on delivery. `src/infrastructure/paymob`.
+
+1. The API creates a payment intention (`POST {PAYMOB_API_URL}/v1/intention/`, `Authorization: Token <secret key>`) for the amount it computed, with a unique `special_reference` (`sub-<payment id>-…` or `stand-<order id>-…`), `notification_url` = `{API_PUBLIC_URL}/v1/webhooks/paymob` and a `redirection_url` back to the dashboard or website. The customer is sent to `{PAYMOB_CHECKOUT_URL}?publicKey=…&clientSecret=…`.
+2. Paymob calls `POST /v1/webhooks/paymob?hmac=…` with the transaction. Only callbacks whose HMAC-SHA512 (over Paymob's 20 documented fields, keyed with `PAYMOB_HMAC_SECRET`) matches are trusted; others get 401.
+3. A successful transaction for the right amount in EGP credits its payment or order: a subscription gets its paid period exactly as if an administrator had approved a transfer; a stand order becomes NEW and PAID. Declines mark subscription payments FAILED. Callbacks are idempotent (transaction ids are unique), a late payment for an abandoned checkout still counts, and refunds, voids, duplicate charges and amount mismatches are written to the audit log for a person to handle.
+
+| Route | Result |
+| --- | --- |
+| `POST /billing/online` `{ planCode, months }` (owner) | 201 `{ paymentId, checkoutUrl }`; an earlier unfinished checkout is cancelled. 409 `ONLINE_PAYMENT_UNAVAILABLE` (`details.reason` `NOT_CONFIGURED` or `PROVIDER_ERROR`) |
+| `POST /webhooks/paymob?hmac=` | Paymob's transaction callback (see above) |
+
+Unfinished subscription checkouts are cancelled after a day; `GET /billing` shows them as `AWAITING_PAYMENT`, then `APPROVED`, `FAILED` or `CANCELLED`.
+
+## Stand shop
+
+Customers order acrylic QR/NFC stands without an account. Prices live in `packages/contracts/src/shop.ts` (`STAND_PRICES`) and are always computed here. Schemas: `shop.ts`, `shop-orders.ts`.
+
+| Route | Result |
+| --- | --- |
+| `GET /public/shop` | Prices, the delivery fee (null: confirmed by phone) and the payment methods on offer. Online payment needs Paymob, the setting, and a fixed fee |
+| `POST /public/shop/logos` (multipart `file`, PNG/JPEG/WebP ≤ 3 MB) | 201 `{ logoId }`; stored privately, re-encoded as PNG. Unused logos are deleted after two days |
+| `POST /public/shop/orders` + `Idempotency-Key` | 201 `{ trackingToken, order, checkoutUrl }`. 409 `PRICE_CHANGED` when `expectedTotalPiastres` differs from today's total; 400 `PAYMENT_METHOD_UNAVAILABLE`; 404 `LOGO_NOT_FOUND`. Online orders wait as `AWAITING_PAYMENT` (cancelled after two days) and nothing is saved if Paymob cannot open a checkout |
+| `GET /public/shop/orders/:token`, `POST …/:token/pay` | The customer's order page; a new checkout for an unpaid online order |
+| `GET /admin/stand-orders?status=open\|<status>&query=`, `GET/PATCH /admin/stand-orders/:id`, `PATCH …/:id/status` `{ status, note? }`, `GET …/:id/lines/:lineId/logo` | The fulfilment queue: NEW → CONFIRMED → IN_PRODUCTION → SHIPPED → DELIVERED, or CANCELLED (with a reason). Every change is in the order's history and the audit log, and the customer is emailed |
+| `GET/PUT /admin/settings/shop` | Delivery fee, cash on delivery, online payment |
+
+## Insights
+
+Restaurant pages send `POST /public/restaurants/:subdomain/visits { source: qr | table | link }` once per load. A visitor counts once per restaurant and day: they are recognised by a SHA-256 of their IP address and browser with a salt derived from the server secret and the date, so no address is stored and nobody can be followed across days. Counters live in Redis (8 days) and the worker copies them to `restaurant_daily_stats` hourly.
+
+| Route | Result |
+| --- | --- |
+| `GET /restaurants/mine/stats?days=7\|30\|90` (owner) | Daily visits, orders and revenue (restaurant time zone; rejected and cancelled orders excluded), how diners arrived, dine-in vs pickup, the top five dishes |
+| `GET /admin/stats?days=7\|30\|90` | Platform totals per Cairo day (visits, orders, new restaurants, subscription revenue), stand orders and their revenue, the ten most visited restaurants |
+
 ## Platform administration
 
 Administrators sign in with `POST /auth/admin/login` `{ email, password, code }`, where `code` comes from an authenticator app (TOTP, RFC 6238). Codes cannot be reused, wrong passwords and wrong codes get the same answer, and administrator sessions end `ADMIN_SESSION_HOURS` (12) after sign-in. Authenticator secrets are stored encrypted (AES-256-GCM, `DATA_ENCRYPTION_KEY`).

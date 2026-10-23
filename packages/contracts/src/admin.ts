@@ -88,6 +88,8 @@ export type AdminOverview = {
   /** Trials and paid periods ending within 7 days. */
   expiringSoon: number;
   newRestaurantsLast30Days: number;
+  /** Stand-shop orders placed or paid and not yet handled (status NEW). */
+  newStandOrders: number;
 };
 
 export type AdminRestaurantRow = {

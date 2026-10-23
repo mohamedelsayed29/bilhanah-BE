@@ -66,10 +66,11 @@ export class AdminService {
   }
 
   async overview(now = new Date()): Promise<AdminOverview> {
-    const [restaurants, plans, pendingPayments] = await Promise.all([
+    const [restaurants, plans, pendingPayments, newStandOrders] = await Promise.all([
       this.prisma.restaurant.findMany({ select: restaurantSelect }),
       this.planPrices(),
       this.prisma.subscriptionPayment.count({ where: { status: 'PENDING' } }),
+      this.prisma.standOrder.count({ where: { status: 'NEW' } }),
     ]);
     const counts = { TRIAL: 0, PAID: 0, INACTIVE: 0, SUSPENDED: 0 };
     let monthlyRecurringPiastres = 0;
@@ -88,6 +89,7 @@ export class AdminService {
       monthlyRecurringPiastres,
       expiringSoon,
       newRestaurantsLast30Days: restaurants.filter((restaurant) => now.getTime() - restaurant.createdAt.getTime() <= 30 * DAY_MS).length,
+      newStandOrders,
     };
   }
 
