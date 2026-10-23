@@ -43,7 +43,7 @@ openssl rand -hex 32   # JWT_ACCESS_SECRET
 openssl rand -hex 24   # POSTGRES_PASSWORD (hex keeps it URL-safe)
 ```
 
-Fill in every value. Secrets are generated fresh for production, never copied from development. Email needs a transactional provider (Resend, Postmark or Amazon SES) with SPF/DKIM set up for the sending domain.
+Fill in every value. Secrets are generated fresh for production, never copied from development. `DATA_ENCRYPTION_KEY` must never change after the first administrator is created. Email needs a transactional provider (Resend, Postmark or Amazon SES) with SPF/DKIM set up for the sending domain.
 
 ## 4. Deploy (first time and every release)
 
@@ -56,11 +56,13 @@ The script builds the images, starts Postgres and Redis, applies migrations, the
 
 **Migrations must stay backward compatible for one release** (add columns before using them; drop them a release later), because the old API keeps serving while the new one starts.
 
-Create the first administrator:
+Create the first administrator (it prints an authenticator key once; administrators sign in at `https://app.bilhanah.com/admin/login` with their password and a 6-digit code):
 
 ```bash
-docker compose -f infra/compose.prod.yml --env-file infra/.env.prod exec api node dist/commands/create-admin.cli.js
+docker compose -f infra/compose.prod.yml --env-file infra/.env.prod exec api node dist/commands/create-admin.cli.js --email you@bilhanah.com --name "Your Name"
 ```
+
+Then, in the admin console, enter the InstaPay, Vodafone Cash and bank details owners pay to (Settings → Payment details). A lost authenticator: `exec api node dist/commands/reset-admin-mfa.cli.js --email ...`.
 
 ## 5. Rollback
 
@@ -78,7 +80,9 @@ Nightly with cron (`crontab -e` as root):
 0 3 * * * BACKUP_REMOTE=r2:bilhanah-backups /opt/bilhanah/infra/scripts/backup.sh >> /var/log/bilhanah-backup.log 2>&1
 ```
 
-Dumps are kept 30 days in `/var/backups/bilhanah`. Configure the `r2` remote with `rclone config` (Cloudflare R2, a bucket separate from images) so copies survive the loss of the server. With `STORAGE_DRIVER=local`, also back up the `bilhanah-prod_media` volume (or use R2 for images).
+Dumps are kept 30 days in `/var/backups/bilhanah`.
+
+Payment receipts are stored under the `private/` prefix and only streamed by the API. With R2 behind a public custom domain, add a Cloudflare WAF rule that blocks `/private/*` on the media hostname (or keep `STORAGE_DRIVER=local`, where the API never serves that path). Configure the `r2` remote with `rclone config` (Cloudflare R2, a bucket separate from images) so copies survive the loss of the server. With `STORAGE_DRIVER=local`, also back up the `bilhanah-prod_media` volume (or use R2 for images).
 
 **Test a restore every month** on a staging server or a scratch database:
 
