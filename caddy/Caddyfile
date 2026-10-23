@@ -1,0 +1,87 @@
+# Bilhanah production edge. Environment (see infra/.env.prod.example):
+#   ROOT_DOMAIN          bilhanah.com
+#   ACME_EMAIL           certificate notices
+#   TLS_MODE             cloudflare (wildcard certificate via DNS-01) or internal (local testing)
+#   CLOUDFLARE_API_TOKEN Zone:DNS:Edit token, for TLS_MODE=cloudflare
+#
+#   {ROOT_DOMAIN}, www   website (www redirects)
+#   api.{ROOT_DOMAIN}    API (and /media when images are stored on this server)
+#   app.{ROOT_DOMAIN}    dashboard
+#   *.{ROOT_DOMAIN}      restaurant menus (the website in restaurant mode)
+{
+	email {$ACME_EMAIL}
+	admin off
+	# Caddy is the first hop: it replaces any X-Forwarded-For sent by clients,
+	# so the API (TRUST_PROXY=1) sees real client IPs for rate limiting.
+	# Keep DNS records "DNS only" in Cloudflare, or add trusted_proxies here.
+}
+
+(common) {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	log {
+		output stdout
+		format json
+	}
+}
+
+# A single-page app: hashed assets cache forever, index.html never does.
+(spa) {
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+	@html not path /assets/*
+	header @html Cache-Control "no-cache"
+	try_files {path} /index.html
+	file_server
+}
+
+www.{$ROOT_DOMAIN} {
+	import /etc/caddy/tls/{$TLS_MODE:cloudflare}
+	redir https://{$ROOT_DOMAIN}{uri} permanent
+}
+
+{$ROOT_DOMAIN} {
+	import /etc/caddy/tls/{$TLS_MODE:cloudflare}
+	import common
+	root * /srv/web
+	import spa
+}
+
+*.{$ROOT_DOMAIN} {
+	import /etc/caddy/tls/{$TLS_MODE:cloudflare}
+	import common
+
+	@api host api.{$ROOT_DOMAIN}
+	handle @api {
+		request_body {
+			# Image uploads are 5 MB; leave room for multipart overhead.
+			max_size 6MB
+		}
+		reverse_proxy {
+			# Every API replica, re-resolved so restarts and scaling are picked up.
+			dynamic a api 3000 {
+				refresh 5s
+			}
+			lb_policy round_robin
+			lb_try_duration 10s
+			health_uri /health
+			health_interval 10s
+		}
+	}
+
+	@dashboard host app.{$ROOT_DOMAIN}
+	handle @dashboard {
+		root * /srv/dashboard
+		import spa
+	}
+
+	handle {
+		root * /srv/web
+		import spa
+	}
+}

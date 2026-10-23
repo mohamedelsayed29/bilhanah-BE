@@ -1,0 +1,117 @@
+# Production stack for a single server. See infra/RUNBOOK.md.
+#   docker compose -f infra/compose.prod.yml --env-file infra/.env.prod up -d
+name: bilhanah-prod
+
+x-api: &api
+  image: ${API_IMAGE:-bilhanah-api:latest}
+  build:
+    context: ..
+    dockerfile: apps/api/Dockerfile
+    target: runtime
+  env_file: .env.prod
+  environment:
+    NODE_ENV: production
+    DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    REDIS_URL: redis://redis:6379
+    # Caddy is the only hop in front of the API.
+    TRUST_PROXY: '1'
+    STORAGE_LOCAL_DIR: /data/media
+  volumes:
+    - media:/data/media
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+  restart: unless-stopped
+  logging: &logging
+    driver: json-file
+    options: { max-size: 20m, max-file: '5' }
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      retries: 30
+    restart: unless-stopped
+    logging: *logging
+
+  redis:
+    image: redis:8.2-alpine
+    # Persist queued jobs (emails) across restarts.
+    command: [redis-server, --appendonly, 'yes', --maxmemory-policy, noeviction]
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      retries: 30
+    restart: unless-stopped
+    logging: *logging
+
+  # One-off: docker compose ... run --rm migrate (scripts/deploy.sh does this before each release).
+  migrate:
+    image: ${MIGRATE_IMAGE:-bilhanah-api-migrate:latest}
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+      target: migrate
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      postgres: { condition: service_healthy }
+    profiles: [tools]
+    logging: *logging
+
+  api:
+    <<: *api
+    deploy:
+      replicas: 2
+
+  worker:
+    <<: *api
+    command: [node, dist/worker.js]
+    # The worker serves no HTTP, so the image's health check does not apply.
+    healthcheck:
+      disable: true
+
+  caddy:
+    image: ${EDGE_IMAGE:-bilhanah-edge:latest}
+    build:
+      context: ..
+      dockerfile: infra/caddy/Dockerfile
+      args:
+        VITE_API_URL: https://api.${ROOT_DOMAIN}${PUBLIC_PORT_SUFFIX:-}
+        VITE_ROOT_DOMAIN: ${ROOT_DOMAIN}
+        VITE_DASHBOARD_URL: https://app.${ROOT_DOMAIN}${PUBLIC_PORT_SUFFIX:-}
+        VITE_CONTACT_EMAIL: ${CONTACT_EMAIL:-}
+        VITE_CONTACT_WHATSAPP: ${CONTACT_WHATSAPP:-}
+    environment:
+      ROOT_DOMAIN: ${ROOT_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+      TLS_MODE: ${TLS_MODE:-cloudflare}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+    ports:
+      - ${HTTP_PORT:-80}:80
+      - ${HTTPS_PORT:-443}:443
+      - ${HTTPS_PORT:-443}:443/udp
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  postgres:
+  redis:
+  media:
+  caddy-data:
+  caddy-config:
