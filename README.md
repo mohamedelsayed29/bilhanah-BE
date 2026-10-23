@@ -247,6 +247,8 @@ With the `PAYMOB_*` settings (and `API_PUBLIC_URL`), owners can pay for a plan b
 
 Unfinished subscription checkouts are cancelled after a day; `GET /billing` shows them as `AWAITING_PAYMENT`, then `APPROVED`, `FAILED` or `CANCELLED`.
 
+**Without a Paymob account:** `bash run.sh --paymob-sandbox` points the API at `scripts/paymob-sandbox.mjs`, a local stand-in that answers the Intention API, shows a checkout page with "Pay" and "Decline", then sends a correctly signed callback and returns the customer, as Paymob does. It changes `.env` only if no real `PAYMOB_SECRET_KEY` is there. To use real Paymob locally, the callback URL must be reachable from the internet (a tunnel such as `cloudflared` for `API_PUBLIC_URL`).
+
 ## Stand shop
 
 Customers order acrylic QR/NFC stands without an account. Prices live in `packages/contracts/src/shop.ts` (`STAND_PRICES`) and are always computed here. Schemas: `shop.ts`, `shop-orders.ts`.

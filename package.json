@@ -23,6 +23,7 @@
     "db:studio": "npm run studio -w @bilhanah/database",
     "contracts:sync": "bash scripts/sync-contracts.sh",
     "vapid:generate": "node scripts/generate-vapid-keys.mjs",
+    "paymob:sandbox": "node scripts/paymob-sandbox.mjs",
     "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",

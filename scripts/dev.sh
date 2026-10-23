@@ -42,6 +42,23 @@ if ! grep -q '^VAPID_PUBLIC_KEY=' .env; then
   step "Adding Web Push keys to .env"
   { printf '\n# Web Push (order-ready alerts). Keep them: new keys orphan existing subscriptions.\n'; node scripts/generate-vapid-keys.mjs; } >> .env
 fi
+# --paymob-sandbox (run.sh) or PAYMOB_SANDBOX=1: online payments through the local stand-in
+# for Paymob (scripts/paymob-sandbox.mjs), unless real Paymob keys are already set.
+API_PORT_DEFAULT="$(sed -n 's/^PORT=//p' .env | tail -1)"; API_PORT_DEFAULT="${API_PORT_DEFAULT:-3000}"
+if [[ "${PAYMOB_SANDBOX:-}" == 1 ]] && ! grep -q '^PAYMOB_SECRET_KEY=' .env; then
+  step "Pointing online payments at the local Paymob sandbox"
+  cat >> .env <<SANDBOX
+
+# Online payments through the local Paymob sandbox (npm run paymob:sandbox). Replace with real keys to use Paymob.
+API_PUBLIC_URL=http://127.0.0.1:$API_PORT_DEFAULT
+PAYMOB_API_URL=http://127.0.0.1:4010
+PAYMOB_CHECKOUT_URL=http://127.0.0.1:4010/checkout
+PAYMOB_SECRET_KEY=sandbox-secret-key
+PAYMOB_PUBLIC_KEY=sandbox-public-key
+PAYMOB_HMAC_SECRET=sandbox-hmac-secret
+PAYMOB_INTEGRATION_IDS=1
+SANDBOX
+fi
 # Stand-shop customers return here from online payments; older .env files get it too.
 if ! grep -q '^WEBSITE_URL=' .env; then
   printf '\n# The website (stand-shop orders return here from Paymob).\nWEBSITE_URL=http://127.0.0.1:%s\n' "$WEB_PORT" >> .env
@@ -122,6 +139,9 @@ start() {
 step "Starting the API and worker${frontends:+, website and dashboard}"
 start api "$green" "npm run --silent start:dev"
 start worker "$magenta" "npm run --silent start:worker:dev"
+if grep -q '^PAYMOB_API_URL=http://127.0.0.1:4010' .env; then
+  start paymob "$blue" "node scripts/paymob-sandbox.mjs"
+fi
 if [[ -f "$WEB_DIR/package.json" ]]; then
   start web "$cyan" "cd '$WEB_DIR' && VITE_API_URL=http://127.0.0.1:$API_PORT VITE_ROOT_DOMAIN=localhost \
     VITE_DASHBOARD_URL=http://127.0.0.1:$DASHBOARD_PORT npm run --silent dev -- --port $WEB_PORT --strictPort"

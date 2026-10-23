@@ -7,6 +7,7 @@
 #   bash run.sh             # start everything
 #   bash run.sh --update    # first pull the latest main in all three repositories
 #   bash run.sh --demo      # also create the demo restaurant (koshary-demo)
+#   bash run.sh --paymob-sandbox  # online payments through a local stand-in for Paymob
 #
 # Needs git, Node.js 24+ and Docker. On Windows, run it inside WSL.
 set -euo pipefail
@@ -20,7 +21,8 @@ for arg in "$@"; do
   case "$arg" in
     --update) update=true ;;
     --demo) demo=true ;;
-    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --paymob-sandbox) export PAYMOB_SANDBOX=1 ;;
+    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $arg (see bash run.sh --help)" >&2; exit 1 ;;
   esac
 done
