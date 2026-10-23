@@ -16,8 +16,10 @@ import { BillingModule } from './modules/billing/billing.module.js';
 import { ContactModule } from './modules/contact/contact.module.js';
 import { MediaModule } from './modules/media/media.module.js';
 import { MenusModule } from './modules/menus/menus.module.js';
+import { OrdersModule } from './modules/orders/orders.module.js';
 import { PlansModule } from './modules/plans/plans.module.js';
 import { RestaurantsModule } from './modules/restaurants/restaurants.module.js';
+import { TablesModule } from './modules/tables/tables.module.js';
 
 @Module({
   imports: [
@@ -38,6 +40,8 @@ import { RestaurantsModule } from './modules/restaurants/restaurants.module.js';
     ContactModule,
     BillingModule,
     AdminModule,
+    TablesModule,
+    OrdersModule,
   ],
   providers: [{ provide: APP_FILTER, useClass: AllExceptionsFilter }],
 })

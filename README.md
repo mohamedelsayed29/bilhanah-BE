@@ -132,6 +132,23 @@ The public menu is cached in Redis under the restaurant's `menuVersion`, which e
 
 Images are stored with `STORAGE_DRIVER=local` (in `var/media`, served at `/media`) or `s3` (Cloudflare R2 in production); see `.env.example`.
 
+## Ordering
+
+Diners order from the public menu without an account; the restaurant handles orders on a live board. Schemas: `packages/contracts/src/orders.ts`. Orders flow only when the plan includes ordering (Orders, Full Experience) **and** the owner has switched it on (`PATCH /restaurants/mine` `{ orderingEnabled, acceptsDineIn, acceptsPickup, ordersPaused }`); `GET /public/restaurants/:subdomain` exposes `ordering.accepting`.
+
+| Route | Result |
+| --- | --- |
+| `POST /public/restaurants/:subdomain/orders` + `Idempotency-Key` header | 201 `{ trackingToken, order }`. Names and prices come from the menu (clients send ids, sizes, quantities and notes only). A retry with the same key returns the same order. 409 `ORDERING_UNAVAILABLE`, `RESTAURANT_CLOSED` (opening hours), `ITEMS_UNAVAILABLE` (`details.menuItemIds`); 404 `TABLE_NOT_FOUND`. Dine-in needs `tableCode` (from the table QR) or `tableLabel`; pickup needs `customerPhone` |
+| `GET /public/orders/:trackingToken` | The diner's order and status (no phone number) |
+| `GET /public/restaurants/:subdomain/tables/:code` | `{ label }` of a scanned table |
+| `GET /orders?view=active\|history` (owner) | The board (oldest first) or closed orders (newest first) |
+| `PATCH /orders/:id/status` `{ status, reason? }` | Only the transitions in `ORDER_TRANSITIONS` (PLACED → ACCEPTED/REJECTED → PREPARING → READY → COMPLETED, or CANCELLED); 409 `INVALID_STATUS_CHANGE` otherwise or when another device moved it first |
+| `GET/POST /tables`, `POST /tables/range` `{ from, to, prefix }`, `PATCH`/`DELETE /tables/:id`, `POST /tables/:id/code` | Tables and their QR links (`qrUrl` = `{publicUrl}/?t={code}`); a new code retires printed ones |
+
+Order numbers restart at #1 each day in the restaurant's time zone. Tracking tokens are the order id plus an HMAC, so they cannot be guessed and a retried checkout gets the same link.
+
+**Live updates** use Socket.IO at path `/v1/realtime`, WebSocket transport only (no sticky sessions needed behind the load balancer; a Redis adapter relays events between API replicas). Namespace `/owner` with `auth: { token: <access token> }` receives `order.created` and `order.updated` for the owner's restaurant and is disconnected when the token expires (reconnect with a fresh one). Namespace `/track` with `auth: { token: <tracking token> }` receives `order.updated` for that order. Clients should also refetch on reconnect.
+
 ## Subscriptions and billing (manual transfer)
 
 Owners pay by InstaPay, Vodafone Cash or bank transfer and send the details for review; an administrator approves (creating a paid period) or rejects them. Schemas: `packages/contracts/src/billing.ts`.

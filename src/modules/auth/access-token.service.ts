@@ -12,6 +12,8 @@ const claimsSchema = z.object({
   sub: z.uuid(),
   sid: z.uuid(),
   role: z.enum(['OWNER', 'ADMIN']),
+  /** Expiry, seconds since the epoch. */
+  exp: z.number().int(),
 });
 export type AccessTokenClaims = z.infer<typeof claimsSchema>;
 

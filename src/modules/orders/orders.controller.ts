@@ -1,0 +1,80 @@
+import { Body, Controller, Get, Header, Headers, HttpCode, HttpStatus, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  idempotencyKeySchema,
+  orderIdParamSchema,
+  ordersQuerySchema,
+  type OwnerOrder,
+  type Paginated,
+  placeOrderSchema,
+  type PlaceOrderResponse,
+  type PublicOrder,
+  trackingTokenSchema,
+  updateOrderStatusSchema,
+} from '@bilhanah/contracts';
+import type { z } from 'zod';
+import { type AuthContext, CurrentAuth } from '../../common/decorators/current-auth.decorator.js';
+import { AccessTokenGuard } from '../../common/guards/access-token.guard.js';
+import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
+import { RequireRole, RolesGuard } from '../../common/guards/roles.guard.js';
+import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
+import { OrdersService } from './orders.service.js';
+
+/** The restaurant's orders: the live board, history, and status changes. */
+@Controller('orders')
+@UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
+@RequireRole('OWNER')
+export class OrdersController {
+  constructor(private readonly orders: OrdersService) {}
+
+  @Get()
+  @Header('Cache-Control', 'no-store')
+  list(@CurrentAuth() auth: AuthContext, @Query(new ZodValidationPipe(ordersQuerySchema)) query: z.output<typeof ordersQuerySchema>): Promise<Paginated<OwnerOrder>> {
+    return this.orders.list(auth.userId, query);
+  }
+
+  @Get(':id')
+  @Header('Cache-Control', 'no-store')
+  get(@CurrentAuth() auth: AuthContext, @Param('id', new ZodValidationPipe(orderIdParamSchema)) id: string): Promise<OwnerOrder> {
+    return this.orders.get(auth.userId, id);
+  }
+
+  @Patch(':id/status')
+  @RateLimit({ name: 'order-status:ip', limit: 600, windowSeconds: 60, by: 'ip' })
+  updateStatus(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', new ZodValidationPipe(orderIdParamSchema)) id: string,
+    @Body(new ZodValidationPipe(updateOrderStatusSchema)) body: z.output<typeof updateOrderStatusSchema>,
+  ): Promise<OwnerOrder> {
+    return this.orders.updateStatus(auth.userId, id, body);
+  }
+}
+
+const idempotencyKeyPipe = new ZodValidationPipe(idempotencyKeySchema);
+
+/** Ordering from a diner's phone: no account, an Idempotency-Key per checkout, and a tracking link. */
+@Controller('public')
+@UseGuards(RateLimitGuard)
+export class PublicOrdersController {
+  constructor(private readonly orders: OrdersService) {}
+
+  @Post('restaurants/:subdomain/orders')
+  @HttpCode(HttpStatus.CREATED)
+  @Header('Cache-Control', 'no-store')
+  @RateLimit({ name: 'place-order:ip', limit: 20, windowSeconds: 10 * 60, by: 'ip' })
+  place(
+    @Param('subdomain') subdomain: string,
+    @Headers('idempotency-key') rawIdempotencyKey: unknown,
+    @Body(new ZodValidationPipe(placeOrderSchema)) body: z.output<typeof placeOrderSchema>,
+  ): Promise<PlaceOrderResponse> {
+    // @Headers takes no pipes, so the header is validated here.
+    const idempotencyKey = idempotencyKeyPipe.transform(rawIdempotencyKey) as string;
+    return this.orders.place(subdomain, idempotencyKey, body);
+  }
+
+  @Get('orders/:token')
+  @Header('Cache-Control', 'no-store')
+  @RateLimit({ name: 'track-order:ip', limit: 300, windowSeconds: 60, by: 'ip' })
+  track(@Param('token', new ZodValidationPipe(trackingTokenSchema)) token: string): Promise<PublicOrder> {
+    return this.orders.track(token);
+  }
+}

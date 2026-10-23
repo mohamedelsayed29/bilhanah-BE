@@ -173,6 +173,11 @@ export class RestaurantsService {
       facebookUrl: restaurant.facebookUrl,
       instagramUrl: restaurant.instagramUrl,
       timezone: restaurant.timezone,
+      ordering: {
+        accepting: access.features.ordering && restaurant.orderingEnabled && !restaurant.ordersPaused,
+        dineIn: restaurant.acceptsDineIn,
+        pickup: restaurant.acceptsPickup,
+      },
       ...this.branding(restaurant),
     };
   }
@@ -188,6 +193,7 @@ export class RestaurantsService {
   }
 
   private async toOwnerRestaurant(restaurant: RestaurantRow, now = new Date()): Promise<OwnerRestaurant> {
+    const access = await this.subscriptions.accessFor(restaurant, now);
     return {
       id: restaurant.id,
       name: restaurant.name,
@@ -204,7 +210,14 @@ export class RestaurantsService {
       facebookUrl: restaurant.facebookUrl,
       instagramUrl: restaurant.instagramUrl,
       createdAt: restaurant.createdAt.toISOString(),
-      access: await this.subscriptions.accessFor(restaurant, now),
+      access,
+      ordering: {
+        included: access.features.ordering,
+        enabled: restaurant.orderingEnabled,
+        acceptsDineIn: restaurant.acceptsDineIn,
+        acceptsPickup: restaurant.acceptsPickup,
+        paused: restaurant.ordersPaused,
+      },
       ...this.branding(restaurant),
     };
   }
