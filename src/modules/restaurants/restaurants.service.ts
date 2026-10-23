@@ -1,6 +1,8 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  DEFAULT_MENU_THEME,
+  isMenuTheme,
   AUTH_ERROR_CODES,
   COMMON_ERROR_CODES,
   ORDER_ERROR_CODES,
@@ -212,6 +214,8 @@ export class RestaurantsService {
       brandColor: restaurant.brandColor,
       // Validated by openingHoursSchema on the way in.
       openingHours: restaurant.openingHours as OpeningHours | null,
+      // A theme removed in a later release falls back to the default.
+      menuTheme: isMenuTheme(restaurant.menuTheme) ? restaurant.menuTheme : DEFAULT_MENU_THEME,
     };
   }
 

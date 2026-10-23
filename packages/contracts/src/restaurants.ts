@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { type Language, languageSchema } from './common.js';
+import { MENU_THEMES, type MenuTheme } from './themes.js';
 import type { ImageSet } from './media.js';
 import type { PublicMenuCategory } from './menus.js';
 import { type OpeningHours, openingHoursSchema } from './opening-hours.js';
@@ -101,6 +102,8 @@ export const updateRestaurantSchema = z.strictObject({
     .nullable()
     .optional(),
   openingHours: openingHoursSchema.nullable().optional(),
+  /** How the public menu looks (see themes.ts). */
+  menuTheme: z.enum(MENU_THEMES).optional(),
   /** Ordering (plans with ordering only): switched on, order types, and a temporary pause. */
   orderingEnabled: z.boolean().optional(),
   acceptsDineIn: z.boolean().optional(),
@@ -126,6 +129,7 @@ export type RestaurantBranding = {
   cover: ImageSet | null;
   brandColor: string | null;
   openingHours: OpeningHours | null;
+  menuTheme: MenuTheme;
 };
 
 export type SubdomainAvailability =

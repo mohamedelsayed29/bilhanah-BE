@@ -162,6 +162,8 @@ model Restaurant {
   coverId         String?          @map("cover_id") @db.Uuid
   /// #rrggbb
   brandColor      String?          @map("brand_color") @db.Char(7)
+  /// Look of the public menu (contracts: MENU_THEMES).
+  menuTheme       String           @default("classic") @map("menu_theme") @db.VarChar(30)
   /// Weekly opening hours (contracts openingHoursSchema); null when not set.
   openingHours    Json?            @map("opening_hours")
   /// Bumped on every change to the public menu; part of its cache key.

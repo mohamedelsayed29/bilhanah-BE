@@ -289,6 +289,14 @@ describe('branding', () => {
       .send({ logoId: null, openingHours: null })
       .expect(200);
     expect(cleared.body).toMatchObject({ logo: null, openingHours: null, cover: { id: cover.id } });
+
+    // The menu's look: classic by default; the owner's choice reaches diners.
+    expect(cleared.body.menuTheme).toBe('classic');
+    await http().patch('/v1/restaurants/mine').set(auth(token)).send({ menuTheme: 'arabesque' }).expect(200);
+    const restaurant = (await http().get('/v1/restaurants/mine').set(auth(token)).expect(200)).body;
+    expect(restaurant.menuTheme).toBe('arabesque');
+    expect((await http().get(`/v1/public/restaurants/${restaurant.subdomain}/menu`).expect(200)).body.restaurant.menuTheme).toBe('arabesque');
+    await http().patch('/v1/restaurants/mine').set(auth(token)).send({ menuTheme: 'neon-disco' }).expect(400);
   });
 
   it('validates colors and hours', async () => {
