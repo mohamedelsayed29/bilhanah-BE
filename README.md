@@ -46,7 +46,7 @@ bash run.sh --update   # pulls the latest main in all three repositories first
 | API | http://127.0.0.1:3000 (`/health/ready`) |
 | Email sent by the app (Mailpit) | http://127.0.0.1:8025 |
 
-Use `WEB_PORT=…` to run the website on another port. With the stack running, `npm run seed:demo` (or `bash run.sh --demo`) creates a demo restaurant with a full menu and photos at http://koshary-demo.localhost:5180 (owner `demo-owner@bilhanah.local` / `demo-password-1`).
+Use `WEB_PORT=…` to run the website on another port. With the stack running, `npm run seed:demo` (or `bash run.sh --demo`) creates a demo restaurant with a full menu and photos at http://koshary-demo.localhost:5180 (owner `demo-owner@bilhanah.local` / `demo-password-1`, kitchen screen `demo-kitchen@bilhanah.local` / `demo-kitchen-1`).
 
 | Command | Purpose |
 | --- | --- |

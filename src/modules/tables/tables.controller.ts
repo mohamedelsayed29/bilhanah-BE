@@ -27,7 +27,7 @@ export class TablesController {
   @HttpCode(HttpStatus.CREATED)
   @RateLimit(WRITE_LIMIT)
   create(@CurrentAuth() auth: AuthContext, @Body(new ZodValidationPipe(createTableSchema)) body: z.output<typeof createTableSchema>): Promise<RestaurantTable> {
-    return this.tables.create(auth.userId, body.label);
+    return this.tables.create(auth.userId, body);
   }
 
   /** Returns every table after creating the range. */

@@ -242,6 +242,27 @@ describe('handling orders', () => {
 });
 
 describe('tables', () => {
+  it('keeps each table\'s shape and seats for the floor plan', async () => {
+    const menu = await restaurantWithMenu();
+    const plain = await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'Bar' }).expect(201);
+    expect(plain.body).toMatchObject({ shape: 'SQUARE', seats: 4 });
+    const round = await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'Window', shape: 'ROUND', seats: 2 }).expect(201);
+    expect(round.body).toMatchObject({ shape: 'ROUND', seats: 2 });
+    await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'Huge', seats: 21 }).expect(400);
+    await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'Odd', shape: 'OVAL' }).expect(400);
+
+    const range = await http().post('/v1/tables/range').set(auth(menu.token)).send({ from: 1, to: 2, prefix: 'Family', shape: 'RECTANGLE', seats: 8 }).expect(201);
+    expect(range.body.filter((row: { label: string }) => row.label.startsWith('Family'))).toEqual([
+      expect.objectContaining({ shape: 'RECTANGLE', seats: 8 }),
+      expect.objectContaining({ shape: 'RECTANGLE', seats: 8 }),
+    ]);
+    const updated = await http().patch(`/v1/tables/${plain.body.id}`).set(auth(menu.token)).send({ shape: 'RECTANGLE', seats: 6 }).expect(200);
+    expect(updated.body).toMatchObject({ label: 'Bar', shape: 'RECTANGLE', seats: 6 });
+
+    const floor = await http().get('/v1/orders/floor').set(auth(menu.token)).expect(200);
+    expect(floor.body.find((row: { id: string }) => row.id === round.body.id)).toMatchObject({ shape: 'ROUND', seats: 2 });
+  });
+
   it('creates tables with QR links and orders from a scanned table', async () => {
     const menu = await restaurantWithMenu();
     const table = await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'Table 1' }).expect(201);

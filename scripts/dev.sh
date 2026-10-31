@@ -11,6 +11,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+NPM_PREFIX="$(npm prefix)"
+NPM_BIN="$NPM_PREFIX/node_modules/.bin"
 WEB_DIR="$(dirname "$ROOT")/bilhanah-client-FE"
 DASHBOARD_DIR="$(dirname "$ROOT")/bilhanah-dashboard-FE"
 
@@ -84,12 +86,29 @@ for port in "$API_PORT" "$WEB_PORT" "$DASHBOARD_PORT"; do
 done
 
 # --- Dependencies -----------------------------------------------------------
-if [[ ! -d node_modules || package-lock.json -nt node_modules/.package-lock.json ]]; then
-  step "Installing dependencies"
-  npm install
-elif [[ ! -f packages/contracts/dist/index.js || ! -f packages/database/dist/index.js ]]; then
+if [[ "$NPM_PREFIX" == "$ROOT" ]]; then
+  if [[ ! -d node_modules || package-lock.json -nt node_modules/.package-lock.json ]]; then
+    step "Installing dependencies"
+    npm install
+  fi
+else
+  # When nested in a larger workspace, npm can resolve these packages from the
+  # parent checkout. Link this app's own copies to keep its types and schema in sync.
+  [[ -d "$NPM_PREFIX/node_modules" ]] || fail "Dependencies are missing from the enclosing workspace at $NPM_PREFIX."
+  mkdir -p node_modules/@bilhanah
+  ln -sfn "$NPM_BIN" node_modules/.bin
+  for package in config contracts database; do
+    ln -sfn "$ROOT/packages/$package" "node_modules/@bilhanah/$package"
+  done
+fi
+if [[ ! -f packages/contracts/dist/index.js || ! -f packages/database/dist/index.js ]]; then
   step "Building shared packages"
-  npm run build:packages
+  if [[ "$NPM_PREFIX" == "$ROOT" ]]; then
+    npm run build:packages
+  else
+    "$NPM_BIN/tsc" -p packages/contracts/tsconfig.json
+    (cd packages/database && "$NPM_BIN/prisma" generate --config prisma.config.ts && "$NPM_BIN/tsc" -p tsconfig.json)
+  fi
 fi
 frontends=()
 for dir in "$WEB_DIR" "$DASHBOARD_DIR"; do
@@ -104,11 +123,21 @@ for dir in "$WEB_DIR" "$DASHBOARD_DIR"; do
   fi
 done
 
+# The dashboard is nested in the backend's enclosing npm workspace, so npm
+# resolves @bilhanah/contracts to the root package (an older, partial copy).
+# Link its repository-local contracts before typechecking or serving it.
+if [[ -f "$DASHBOARD_DIR/packages/contracts/tsconfig.json" ]]; then
+  mkdir -p "$DASHBOARD_DIR/node_modules/@bilhanah"
+  ln -sfn ../../packages/contracts "$DASHBOARD_DIR/node_modules/@bilhanah/contracts"
+  ln -sfn "$ROOT/packages/config" "$DASHBOARD_DIR/node_modules/@bilhanah/config"
+  "$NPM_BIN/tsc" -p "$DASHBOARD_DIR/packages/contracts/tsconfig.json"
+fi
+
 # --- Services and database --------------------------------------------------
 step "Starting PostgreSQL, Redis and Mailpit"
-npm run --silent services:up
+docker compose -f "$ROOT/infra/compose.dev.yml" up -d --wait
 step "Applying database migrations"
-npm run --silent db:deploy >/dev/null
+(cd packages/database && "$NPM_BIN/prisma" migrate deploy --config prisma.config.ts >/dev/null)
 
 # --- Apps -------------------------------------------------------------------
 pids=()
@@ -164,7 +193,7 @@ ${bold}${green}Bilhanah is running${reset}
   Dashboard          http://127.0.0.1:$DASHBOARD_PORT
   API                http://127.0.0.1:$API_PORT  (health: /health/ready)
   Email (Mailpit)    http://127.0.0.1:8025
-  Database           postgresql://127.0.0.1:55432/bilhanah  (npm run db:studio)
+  Database           PostgreSQL at 127.0.0.1:55432  (npm run db:studio)
 
 Press Ctrl+C to stop.
 
@@ -173,6 +202,16 @@ else
   printf '%sThe API did not become ready; see the [api] output above.%s\n' "$yellow" "$reset"
 fi
 
-# Stop everything as soon as any app exits.
-wait -n
-printf '%sAn app exited; stopping the rest.%s\n' "$yellow" "$reset"
+# Stop everything as soon as any app exits. Bash 3.2 (the macOS system Bash)
+# does not support `wait -n`, so poll the process groups and reap the first one
+# that exits.
+while :; do
+  for pid in "${pids[@]}"; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" || true
+      printf '%sAn app exited; stopping the rest.%s\n' "$yellow" "$reset"
+      exit 1
+    fi
+  done
+  sleep 1
+done

@@ -2,12 +2,15 @@ import { z } from 'zod';
 import { emailSchema, languageSchema } from './common.js';
 import {
   GOOGLE_REVIEW_DOMAINS,
+  PRODUCT_SHAPES,
+  SHOP_PRODUCTS,
   STAND_DESIGNS,
   STAND_LIMITS,
   STAND_ORDER_STATUSES,
   STAND_PAYMENT_METHODS,
   STAND_PURPOSES,
   STAND_SHAPES,
+  STICKER_SHAPES,
 } from './shop.js';
 
 const hexColor = z
@@ -39,10 +42,11 @@ const isGoogleLink = (value: string) => {
 
 const text = (max: number) => z.string().trim().max(max).default('');
 
-/** One stand design in the order. Prices are not sent: the API computes them. */
+/** One stand or sticker design in the order. Prices are not sent: the API computes them. */
 export const standOrderLineSchema = z
   .strictObject({
-    shape: z.enum(STAND_SHAPES),
+    product: z.enum(SHOP_PRODUCTS).default('stand'),
+    shape: z.enum([...STAND_SHAPES, ...STICKER_SHAPES]),
     nfc: z.boolean(),
     design: z.enum(STAND_DESIGNS),
     customColors: z.strictObject({ background: hexColor, ink: hexColor }).nullable().default(null),
@@ -58,6 +62,9 @@ export const standOrderLineSchema = z
     notes: text(STAND_LIMITS.notes),
   })
   .superRefine((line, context) => {
+    if (!(PRODUCT_SHAPES[line.product] as readonly string[]).includes(line.shape)) {
+      context.addIssue({ code: 'custom', path: ['shape'], message: `This shape is not available for a ${line.product}.` });
+    }
     if (line.purpose === 'reviews' && !isGoogleLink(line.url)) {
       context.addIssue({ code: 'custom', path: ['url'], message: 'Use your Google Maps or Google review link.' });
     }

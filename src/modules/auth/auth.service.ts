@@ -177,8 +177,8 @@ export class AuthService {
   async login(input: z.output<typeof loginSchema>, meta: ClientMeta): Promise<IssuedSession> {
     const user = await this.prisma.user.findUnique({ where: { email: input.email } });
     const passwordValid = await this.passwords.verify(user?.passwordHash ?? undefined, input.password);
-    // Platform administrators will sign in through a separate MFA flow.
-    if (!user || !passwordValid || user.role !== 'OWNER') throw invalidCredentials();
+    // Platform administrators sign in through a separate MFA flow.
+    if (!user || !passwordValid || user.role === 'ADMIN') throw invalidCredentials();
     if (user.status !== 'ACTIVE') {
       throw new ForbiddenException({
         code: AUTH_ERROR_CODES.ACCOUNT_SUSPENDED,

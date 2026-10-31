@@ -3,6 +3,7 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { ConfigService } from '@nestjs/config';
 import {
   type bulkCreateTablesSchema,
+  type createTableSchema,
   normalizeSubdomain,
   ORDER_ERROR_CODES,
   ORDER_LIMITS,
@@ -42,13 +43,13 @@ export class TablesService {
     return tables.map((table) => this.toView(table, restaurant.subdomain));
   }
 
-  async create(ownerId: string, label: string): Promise<RestaurantTable> {
+  async create(ownerId: string, input: z.output<typeof createTableSchema>): Promise<RestaurantTable> {
     const restaurant = await this.restaurantFor(ownerId);
     const { _count, _max } = await this.prisma.table.aggregate({ where: { restaurantId: restaurant.id }, _count: true, _max: { sortOrder: true } });
     if (_count >= ORDER_LIMITS.tables) throw this.limitReached();
     try {
       const table = await this.prisma.table.create({
-        data: { restaurantId: restaurant.id, label, publicCode: newPublicCode(), sortOrder: (_max.sortOrder ?? -1) + 1 },
+        data: { restaurantId: restaurant.id, ...input, publicCode: newPublicCode(), sortOrder: (_max.sortOrder ?? -1) + 1 },
       });
       return this.toView(table, restaurant.subdomain);
     } catch (error) {
@@ -57,7 +58,7 @@ export class TablesService {
     }
   }
 
-  /** Creates {prefix}{from} ... {prefix}{to}; labels that already exist are skipped. */
+  /** Creates {prefix}{from} ... {prefix}{to}, all of one shape and size; labels that already exist are skipped. */
   async createRange(ownerId: string, input: z.output<typeof bulkCreateTablesSchema>): Promise<RestaurantTable[]> {
     const restaurant = await this.restaurantFor(ownerId);
     const existing = await this.prisma.table.findMany({ where: { restaurantId: restaurant.id }, select: { label: true, sortOrder: true } });
@@ -70,7 +71,14 @@ export class TablesService {
     if (existing.length + labels.length > ORDER_LIMITS.tables) throw this.limitReached();
     const start = Math.max(-1, ...existing.map((table) => table.sortOrder)) + 1;
     await this.prisma.table.createMany({
-      data: labels.map((label, index) => ({ restaurantId: restaurant.id, label, publicCode: newPublicCode(), sortOrder: start + index })),
+      data: labels.map((label, index) => ({
+        restaurantId: restaurant.id,
+        label,
+        shape: input.shape,
+        seats: input.seats,
+        publicCode: newPublicCode(),
+        sortOrder: start + index,
+      })),
       skipDuplicates: true,
     });
     return this.list(ownerId);
@@ -117,6 +125,8 @@ export class TablesService {
     return {
       id: table.id,
       label: table.label,
+      shape: table.shape,
+      seats: table.seats,
       publicCode: table.publicCode,
       isActive: table.isActive,
       qrUrl: `${this.urlTemplate.replace('{subdomain}', subdomain)}/?t=${table.publicCode}`,

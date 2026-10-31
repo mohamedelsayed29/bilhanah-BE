@@ -6,14 +6,14 @@ const copy = {
     ar: (name: string): Template => ({
       subject: 'فعّل حسابك في بالهنا',
       greeting: `أهلًا ${name}،`,
-      body: 'شكرًا لتسجيلك في بالهنا. اضغط على الزر علشان تأكد إيميلك وتبدأ تجهز منيو مطعمك. اللينك صالح لمدة ٢٤ ساعة.',
+      body: 'شكرًا لتسجيلك في بالهنا. اضغط على الزر علشان تأكد إيميلك وتبدأ تجهز منيو مطعمك أو كافيهك. اللينك صالح لمدة ٢٤ ساعة.',
       action: 'تأكيد الإيميل',
       footer: 'لو مش إنت اللي سجلت، تجاهل الرسالة دي.',
     }),
     en: (name: string): Template => ({
       subject: 'Confirm your Bilhanah account',
       greeting: `Hi ${name},`,
-      body: 'Thanks for signing up for Bilhanah. Confirm your email to start building your restaurant menu. This link is valid for 24 hours.',
+      body: 'Thanks for signing up for Bilhanah. Confirm your email to start building your restaurant or café menu. This link is valid for 24 hours.',
       action: 'Confirm email',
       footer: "If you didn't sign up, you can ignore this email.",
     }),

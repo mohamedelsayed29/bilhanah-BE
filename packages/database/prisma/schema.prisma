@@ -12,6 +12,8 @@ datasource db {
 enum UserRole {
   OWNER
   ADMIN
+  /// A restaurant's kitchen screen; created by its owner, sees and moves orders only.
+  KITCHEN
 
   @@map("user_role")
 }
@@ -78,6 +80,8 @@ model User {
   totpSecret        String?    @map("totp_secret")
   /// Last accepted TOTP time step, so a code cannot be used twice.
   totpLastStep      Int?       @map("totp_last_step")
+  /// Kitchen accounts only: the restaurant they work for.
+  staffRestaurantId String?    @map("staff_restaurant_id") @db.Uuid
   createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -85,11 +89,13 @@ model User {
   emailVerificationTokens EmailVerificationToken[]
   passwordResetTokens     PasswordResetToken[]
   restaurant              Restaurant?
+  staffRestaurant         Restaurant?              @relation("RestaurantStaff", fields: [staffRestaurantId], references: [id], onDelete: Cascade)
   reviewedPayments        SubscriptionPayment[]
   standOrderEvents        StandOrderEvent[]
   grantedEntitlements     Entitlement[]
   auditLogs               AuditLog[]
 
+  @@index([staffRestaurantId])
   @@map("users")
 }
 
@@ -178,6 +184,7 @@ model Restaurant {
   updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   owner         User                  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  staff         User[]                @relation("RestaurantStaff")
   entitlements  Entitlement[]
   logo          Media?                @relation("RestaurantLogo", fields: [logoId], references: [id], onDelete: SetNull)
   cover         Media?                @relation("RestaurantCover", fields: [coverId], references: [id], onDelete: SetNull)
@@ -364,28 +371,28 @@ enum PaymentStatus {
 /// A subscription paid by manual transfer and reviewed by an administrator.
 /// At most one PENDING payment per restaurant (partial unique index in SQL).
 model SubscriptionPayment {
-  id              String        @id @default(uuid()) @db.Uuid
-  restaurantId    String        @map("restaurant_id") @db.Uuid
-  planCode        PlanCode      @map("plan_code")
-  months          Int
+  id                  String        @id @default(uuid()) @db.Uuid
+  restaurantId        String        @map("restaurant_id") @db.Uuid
+  planCode            PlanCode      @map("plan_code")
+  months              Int
   /// Computed by the server from the plan price at submission.
-  amountPiastres  Int           @map("amount_piastres")
-  method          PaymentMethod
+  amountPiastres      Int           @map("amount_piastres")
+  method              PaymentMethod
   /// Transfer reference from the payer's receipt or SMS.
-  reference       String        @db.VarChar(100)
-  payerName       String?       @map("payer_name") @db.VarChar(80)
-  proofId         String?       @map("proof_id") @db.Uuid
-  status          PaymentStatus @default(PENDING)
+  reference           String        @db.VarChar(100)
+  payerName           String?       @map("payer_name") @db.VarChar(80)
+  proofId             String?       @map("proof_id") @db.Uuid
+  status              PaymentStatus @default(PENDING)
   /// The paid period created on approval.
-  entitlementId   String?       @unique @map("entitlement_id") @db.Uuid
-  reviewedById    String?       @map("reviewed_by_id") @db.Uuid
-  reviewedAt      DateTime?     @map("reviewed_at") @db.Timestamptz(3)
-  rejectionReason String?       @map("rejection_reason") @db.VarChar(300)
+  entitlementId       String?       @unique @map("entitlement_id") @db.Uuid
+  reviewedById        String?       @map("reviewed_by_id") @db.Uuid
+  reviewedAt          DateTime?     @map("reviewed_at") @db.Timestamptz(3)
+  rejectionReason     String?       @map("rejection_reason") @db.VarChar(300)
   /// Online payments: Paymob's order and the transaction that paid it.
-  paymobOrderId       String?   @map("paymob_order_id") @db.VarChar(40)
-  paymobTransactionId String?   @unique @map("paymob_transaction_id") @db.VarChar(40)
-  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  paymobOrderId       String?       @map("paymob_order_id") @db.VarChar(40)
+  paymobTransactionId String?       @unique @map("paymob_transaction_id") @db.VarChar(40)
+  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   restaurant  Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   plan        Plan         @relation(fields: [planCode], references: [code])
@@ -449,15 +456,18 @@ model ExpiryReminder {
 
 /// A dining table with its own QR code ({publicUrl}/?t={publicCode}).
 model Table {
-  id           String   @id @default(uuid()) @db.Uuid
-  restaurantId String   @map("restaurant_id") @db.Uuid
-  label        String   @db.VarChar(40)
+  id           String     @id @default(uuid()) @db.Uuid
+  restaurantId String     @map("restaurant_id") @db.Uuid
+  label        String     @db.VarChar(40)
+  /// How the table is drawn on the floor plan, and how many guests it seats.
+  shape        TableShape @default(SQUARE)
+  seats        Int        @default(4) @db.SmallInt
   /// Random code printed in the table's QR; regenerating it retires printed codes.
-  publicCode   String   @unique @map("public_code") @db.VarChar(16)
-  isActive     Boolean  @default(true) @map("is_active")
-  sortOrder    Int      @map("sort_order")
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  publicCode   String     @unique @map("public_code") @db.VarChar(16)
+  isActive     Boolean    @default(true) @map("is_active")
+  sortOrder    Int        @map("sort_order")
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   orders     Order[]
@@ -465,6 +475,14 @@ model Table {
   @@unique([restaurantId, label])
   @@index([restaurantId, sortOrder])
   @@map("tables")
+}
+
+enum TableShape {
+  ROUND
+  SQUARE
+  RECTANGLE
+
+  @@map("table_shape")
 }
 
 enum OrderType {
@@ -511,6 +529,8 @@ model Order {
   readyAt          DateTime?   @map("ready_at") @db.Timestamptz(3)
   completedAt      DateTime?   @map("completed_at") @db.Timestamptz(3)
   closedAt         DateTime?   @map("closed_at") @db.Timestamptz(3)
+  /// The restaurant marked the bill paid. A dine-in order not yet paid keeps its table occupied.
+  paidAt           DateTime?   @map("paid_at") @db.Timestamptz(3)
   updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   restaurant        Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
@@ -522,6 +542,7 @@ model Order {
   @@unique([restaurantId, businessDay, number])
   @@index([restaurantId, status, placedAt])
   @@index([restaurantId, placedAt])
+  @@index([restaurantId, tableId, paidAt])
   @@map("orders")
 }
 
@@ -671,6 +692,8 @@ model StandOrderLine {
   id                String  @id @default(uuid()) @db.Uuid
   orderId           String  @map("order_id") @db.Uuid
   sortOrder         Int     @map("sort_order")
+  /// "stand" or "sticker".
+  product           String  @default("stand") @db.VarChar(20)
   shape             String  @db.VarChar(20)
   nfc               Boolean
   design            String  @db.VarChar(20)

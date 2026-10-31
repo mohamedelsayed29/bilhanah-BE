@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import type { UserRole } from '@bilhanah/contracts';
+import { type UserRole, userRoleSchema } from '@bilhanah/contracts';
 import { z } from 'zod';
 import type { Env } from '../../config/env.schema.js';
 
@@ -11,7 +11,7 @@ export const JWT_AUDIENCE = 'bilhanah-dashboard';
 const claimsSchema = z.object({
   sub: z.uuid(),
   sid: z.uuid(),
-  role: z.enum(['OWNER', 'ADMIN']),
+  role: userRoleSchema,
   /** Expiry, seconds since the epoch. */
   exp: z.number().int(),
 });

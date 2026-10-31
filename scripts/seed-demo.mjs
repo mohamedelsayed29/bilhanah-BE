@@ -5,6 +5,7 @@
 //   npm run seed:demo -- --reset # replaces the demo menu
 //
 // Owner: demo-owner@bilhanah.local / demo-password-1 · Restaurant: koshary-demo
+// Kitchen screen: demo-kitchen@bilhanah.local / demo-kitchen-1
 // Development only: confirms the account through Mailpit.
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -15,6 +16,8 @@ const ORIGIN = process.env.DASHBOARD_ORIGIN ?? 'http://127.0.0.1:5174';
 const EMAIL = 'demo-owner@bilhanah.local';
 const PASSWORD = 'demo-password-1';
 const SUBDOMAIN = 'koshary-demo';
+const KITCHEN_EMAIL = 'demo-kitchen@bilhanah.local';
+const KITCHEN_PASSWORD = 'demo-kitchen-1';
 const MEDIA = resolve(import.meta.dirname, 'demo-media');
 const reset = process.argv.includes('--reset');
 
@@ -143,5 +146,11 @@ if (menu.categories.length && !reset) {
   }
 }
 
+const kitchens = (await api('GET', '/kitchen-accounts')).data;
+if (!kitchens.some((account) => account.email === KITCHEN_EMAIL)) {
+  console.log('Creating the demo kitchen account…');
+  await api('POST', '/kitchen-accounts', { fullName: 'المطبخ', email: KITCHEN_EMAIL, password: KITCHEN_PASSWORD });
+}
+
 const restaurant = (await api('GET', '/restaurants/mine')).data;
-console.log(`\nDemo menu: ${restaurant.publicUrl}\nOwner login: ${EMAIL} / ${PASSWORD}`);
+console.log(`\nDemo menu: ${restaurant.publicUrl}\nOwner login: ${EMAIL} / ${PASSWORD}\nKitchen login: ${KITCHEN_EMAIL} / ${KITCHEN_PASSWORD}`);

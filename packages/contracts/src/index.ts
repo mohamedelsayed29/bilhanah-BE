@@ -17,3 +17,4 @@ export * from './shop-orders.js';
 export * from './analytics.js';
 export * from './analytics-schemas.js';
 export * from './themes.js';
+export * from './kitchen.js';

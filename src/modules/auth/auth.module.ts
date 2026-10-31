@@ -22,6 +22,6 @@ import { PasswordService } from './password.service.js';
   controllers: [AuthController],
   providers: [AuthService, PasswordService, AccessTokenService, AccessTokenGuard],
   // Other modules import AuthModule to protect routes with AccessTokenGuard.
-  exports: [AccessTokenService, AccessTokenGuard],
+  exports: [AccessTokenService, AccessTokenGuard, PasswordService],
 })
 export class AuthModule {}

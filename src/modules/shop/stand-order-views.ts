@@ -1,4 +1,4 @@
-import type { AdminStandOrder, PublicStandOrder, StandDesign, StandOrderLine, StandPurpose, StandShape } from '@bilhanah/contracts';
+import type { AdminStandOrder, ProductShape, PublicStandOrder, ShopProduct, StandDesign, StandOrderLine, StandPurpose } from '@bilhanah/contracts';
 import type { Prisma } from '@bilhanah/database';
 
 export const standOrderInclude = {
@@ -13,7 +13,8 @@ export const standOrderReference = (number: number) => `S-${number}`;
 function toLine(line: StandOrderRow['lines'][number]): StandOrderLine {
   return {
     id: line.id,
-    shape: line.shape as StandShape,
+    product: line.product as ShopProduct,
+    shape: line.shape as ProductShape,
     nfc: line.nfc,
     design: line.design as StandDesign,
     customColors: line.customBackground && line.customInk ? { background: line.customBackground, ink: line.customInk } : null,

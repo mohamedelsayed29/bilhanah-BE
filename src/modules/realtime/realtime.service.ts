@@ -25,7 +25,8 @@ const orderRoom = (orderId: string) => `order:${orderId}`;
  * Live order updates over Socket.IO (WebSocket only, so no sticky sessions
  * are needed). The Redis adapter relays events between API replicas.
  *
- * - /owner: auth { token: accessToken }. Joins the owner's restaurant room;
+ * - /owner: auth { token: accessToken }. Joins the restaurant room of the
+ *   owner or kitchen account;
  *   disconnected when the token expires, so the client reconnects with a
  *   fresh one and revoked sessions stop receiving events.
  * - /track: auth { token: trackingToken }. Joins that one order's room.
@@ -99,12 +100,17 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
   private async authenticateOwner(socket: Socket): Promise<void> {
     const token = socket.handshake.auth['token'];
     const claims = typeof token === 'string' ? await this.accessTokens.verify(token) : null;
-    if (!claims || claims.role !== 'OWNER') throw new Error('UNAUTHENTICATED');
+    if (!claims || (claims.role !== 'OWNER' && claims.role !== 'KITCHEN')) throw new Error('UNAUTHENTICATED');
     const session = await this.prisma.session.findUnique({
       where: { id: claims.sid },
-      select: { userId: true, revokedAt: true, expiresAt: true, user: { select: { status: true, restaurant: { select: { id: true } } } } },
+      select: {
+        userId: true,
+        revokedAt: true,
+        expiresAt: true,
+        user: { select: { role: true, status: true, staffRestaurantId: true, restaurant: { select: { id: true } } } },
+      },
     });
-    const restaurantId = session?.user.restaurant?.id;
+    const restaurantId = session?.user.role === 'KITCHEN' ? session.user.staffRestaurantId : session?.user.restaurant?.id;
     if (!session || session.userId !== claims.sub || session.revokedAt || session.expiresAt <= new Date() || session.user.status !== 'ACTIVE' || !restaurantId) {
       throw new Error('UNAUTHENTICATED');
     }

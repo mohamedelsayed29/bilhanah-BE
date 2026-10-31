@@ -17,6 +17,7 @@ import { AnalyticsModule } from './modules/analytics/analytics.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { BillingModule } from './modules/billing/billing.module.js';
 import { ContactModule } from './modules/contact/contact.module.js';
+import { KitchenModule } from './modules/kitchen/kitchen.module.js';
 import { MediaModule } from './modules/media/media.module.js';
 import { MenusModule } from './modules/menus/menus.module.js';
 import { OrdersModule } from './modules/orders/orders.module.js';
@@ -50,6 +51,7 @@ import { TablesModule } from './modules/tables/tables.module.js';
     AdminModule,
     TablesModule,
     OrdersModule,
+    KitchenModule,
     PwaModule,
     ShopModule,
     PaymentsModule,

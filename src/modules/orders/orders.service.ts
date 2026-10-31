@@ -13,6 +13,8 @@ import {
   type PlaceOrderResponse,
   type PublicOrder,
   RESTAURANT_ERROR_CODES,
+  TABLE_OCCUPANCY_HOURS,
+  type TableOccupancy,
   type ordersQuerySchema,
   type updateOrderStatusSchema,
 } from '@bilhanah/contracts';
@@ -35,6 +37,9 @@ const orderInclude = {
 } satisfies Prisma.OrderInclude;
 
 type OrderRow = Prisma.OrderGetPayload<{ include: typeof orderInclude }>;
+
+/** Rejected and cancelled orders have no bill, so they never keep a table occupied. */
+const UNBILLED_STATUSES: OrderStatus[] = ['REJECTED', 'CANCELLED'];
 
 const orderNotFound = () => new NotFoundException({ code: ORDER_ERROR_CODES.ORDER_NOT_FOUND, message: 'Order not found.' });
 const restaurantNotFound = () =>
@@ -227,6 +232,72 @@ export class OrdersService {
     return ownerView;
   }
 
+  /** Marks the bill paid or, to undo a mistake, unpaid. */
+  async setPaid(ownerId: string, orderId: string, paid: boolean): Promise<OwnerOrder> {
+    const restaurantId = await this.restaurantIdFor(ownerId);
+    const current = await this.prisma.order.findFirst({ where: { id: orderId, restaurantId }, select: { status: true, paidAt: true } });
+    if (!current) throw orderNotFound();
+    if (paid && UNBILLED_STATUSES.includes(current.status)) {
+      throw new ConflictException({ code: ORDER_ERROR_CODES.ORDER_NOT_PAYABLE, message: 'A rejected or cancelled order has nothing to pay.' });
+    }
+    if (paid === Boolean(current.paidAt)) return this.get(ownerId, orderId);
+    const order = await this.prisma.order.update({ where: { id: orderId }, data: { paidAt: paid ? new Date() : null }, include: orderInclude });
+    const ownerView = this.toOwnerOrder(order);
+    this.realtime.emitOrderUpdated(restaurantId, ownerView, this.toPublicOrder(order));
+    return ownerView;
+  }
+
+  /** Every active table and the unpaid orders keeping it occupied. */
+  async floor(ownerId: string, now = new Date()): Promise<TableOccupancy[]> {
+    const restaurantId = await this.restaurantIdFor(ownerId);
+    const [tables, open] = await Promise.all([
+      this.prisma.table.findMany({ where: { restaurantId, isActive: true }, orderBy: { sortOrder: 'asc' }, select: { id: true, label: true, shape: true, seats: true } }),
+      this.prisma.order.findMany({
+        where: this.openOnTableWhere(restaurantId, now),
+        orderBy: { placedAt: 'asc' },
+        select: { id: true, number: true, status: true, subtotalPiastres: true, placedAt: true, tableId: true, tableLabel: true },
+      }),
+    ]);
+    return tables.map((table) => {
+      // Orders typed in by hand ("Table 5") carry only the label.
+      const orders = open.filter((order) => (order.tableId ? order.tableId === table.id : order.tableLabel === table.label));
+      return {
+        id: table.id,
+        label: table.label,
+        shape: table.shape,
+        seats: table.seats,
+        occupied: orders.length > 0,
+        openOrders: orders.map((order) => ({
+          id: order.id,
+          number: order.number,
+          status: order.status,
+          subtotalPiastres: order.subtotalPiastres,
+          placedAt: order.placedAt.toISOString(),
+        })),
+        unpaidPiastres: orders.reduce((sum, order) => sum + order.subtotalPiastres, 0),
+        since: orders[0]?.placedAt.toISOString() ?? null,
+      };
+    });
+  }
+
+  /** The guests paid and left: marks every open order on the table paid, freeing it. */
+  async settleTable(ownerId: string, tableId: string, now = new Date()): Promise<TableOccupancy[]> {
+    const restaurantId = await this.restaurantIdFor(ownerId);
+    const table = await this.prisma.table.findFirst({ where: { id: tableId, restaurantId }, select: { id: true, label: true } });
+    if (!table) throw new NotFoundException({ code: ORDER_ERROR_CODES.TABLE_NOT_FOUND, message: 'Table not found.' });
+    const where: Prisma.OrderWhereInput = {
+      ...this.openOnTableWhere(restaurantId, now),
+      OR: [{ tableId: table.id }, { tableId: null, tableLabel: table.label }],
+    };
+    const ids = (await this.prisma.order.findMany({ where, select: { id: true } })).map((order) => order.id);
+    if (ids.length) {
+      await this.prisma.order.updateMany({ where: { id: { in: ids }, paidAt: null }, data: { paidAt: now } });
+      const orders = await this.prisma.order.findMany({ where: { id: { in: ids } }, include: orderInclude });
+      for (const order of orders) this.realtime.emitOrderUpdated(restaurantId, this.toOwnerOrder(order), this.toPublicOrder(order));
+    }
+    return this.floor(ownerId, now);
+  }
+
   /** Something about the order changed without a status change (a diner turned alerts on or off): bump it and tell the board. */
   async touch(orderId: string): Promise<void> {
     const order = await this.prisma.order.update({ where: { id: orderId }, data: { updatedAt: new Date() }, include: orderInclude });
@@ -280,10 +351,26 @@ export class OrdersService {
     return lines;
   }
 
-  private async restaurantIdFor(ownerId: string): Promise<string> {
-    const restaurant = await this.prisma.restaurant.findUnique({ where: { ownerId }, select: { id: true } });
-    if (!restaurant) throw restaurantNotFound();
-    return restaurant.id;
+  /** Dine-in orders still on the bill: unpaid, not rejected or cancelled, and recent enough to count. */
+  private openOnTableWhere(restaurantId: string, now: Date): Prisma.OrderWhereInput {
+    return {
+      restaurantId,
+      type: 'DINE_IN',
+      paidAt: null,
+      status: { notIn: UNBILLED_STATUSES },
+      placedAt: { gte: new Date(now.getTime() - TABLE_OCCUPANCY_HOURS * 60 * 60 * 1000) },
+    };
+  }
+
+  /** The restaurant of an owner, or of a kitchen account. */
+  private async restaurantIdFor(userId: string): Promise<string> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true, staffRestaurantId: true, restaurant: { select: { id: true } } },
+    });
+    const restaurantId = user?.role === 'KITCHEN' ? user.staffRestaurantId : user?.restaurant?.id;
+    if (!restaurantId) throw restaurantNotFound();
+    return restaurantId;
   }
 
   private placed(order: OrderRow): PlaceOrderResponse {
@@ -317,6 +404,7 @@ export class OrdersService {
       completedAt: order.completedAt?.toISOString() ?? null,
       closedAt: order.closedAt?.toISOString() ?? null,
       rejectionReason: order.rejectionReason,
+      paidAt: order.paidAt?.toISOString() ?? null,
       updatedAt: order.updatedAt.toISOString(),
     };
   }

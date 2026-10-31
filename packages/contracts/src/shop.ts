@@ -1,8 +1,19 @@
 // The QR/NFC table-stand shop. Free of zod, so the website can import it
 // without the schema library; request schemas are in shop-orders.ts.
 
-export const STAND_SHAPES = ['classic', 'arch', 'tilt'] as const;
+/** stand: an acrylic table stand. sticker: a QR sticker stuck on the table. */
+export const SHOP_PRODUCTS = ['stand', 'sticker'] as const;
+export type ShopProduct = (typeof SHOP_PRODUCTS)[number];
+
+export const STAND_SHAPES = ['classic', 'arch', 'tilt', 'wood'] as const;
 export type StandShape = (typeof STAND_SHAPES)[number];
+
+export const STICKER_SHAPES = ['square', 'circle'] as const;
+export type StickerShape = (typeof STICKER_SHAPES)[number];
+
+/** The shapes each product comes in; an order line's shape must belong to its product. */
+export const PRODUCT_SHAPES = { stand: STAND_SHAPES, sticker: STICKER_SHAPES } as const satisfies Record<ShopProduct, readonly string[]>;
+export type ProductShape = StandShape | StickerShape;
 
 export const STAND_DESIGNS = ['signature', 'forest', 'clay', 'mono'] as const;
 export type StandDesign = (typeof STAND_DESIGNS)[number];
@@ -15,6 +26,12 @@ export const STAND_PRICES = {
   /** One acrylic stand with the printed QR code. */
   unitPiastres: 35_000,
   /** An NFC chip added to a stand. */
+  nfcPiastres: 10_000,
+} as const;
+
+/** One printed QR sticker, and the NFC chip added to it. */
+export const STICKER_PRICES = {
+  unitPiastres: 15_000,
   nfcPiastres: 10_000,
 } as const;
 
@@ -33,6 +50,11 @@ export const GOOGLE_REVIEW_DOMAINS = ['google.com', 'google.com.eg', 'g.page', '
 
 export function standUnitPricePiastres(nfc: boolean): number {
   return STAND_PRICES.unitPiastres + (nfc ? STAND_PRICES.nfcPiastres : 0);
+}
+
+export function shopUnitPricePiastres(product: ShopProduct, nfc: boolean): number {
+  const prices = product === 'sticker' ? STICKER_PRICES : STAND_PRICES;
+  return prices.unitPiastres + (nfc ? prices.nfcPiastres : 0);
 }
 
 /** CASH_ON_DELIVERY: paid to the courier. PAYMOB: paid online (card or wallet) before production. */
@@ -81,6 +103,7 @@ export const SHOP_ERROR_CODES = {
 /** GET /v1/public/shop: what the checkout offers today. */
 export type ShopInfo = {
   prices: typeof STAND_PRICES;
+  stickerPrices: typeof STICKER_PRICES;
   /** Flat delivery fee; null means it is confirmed by phone (and online payment is then not offered). */
   deliveryFeePiastres: number | null;
   paymentMethods: StandPaymentMethod[];
@@ -91,7 +114,8 @@ export type UploadedLogo = { logoId: string };
 
 export type StandOrderLine = {
   id: string;
-  shape: StandShape;
+  product: ShopProduct;
+  shape: ProductShape;
   nfc: boolean;
   design: StandDesign;
   customColors: { background: string; ink: string } | null;

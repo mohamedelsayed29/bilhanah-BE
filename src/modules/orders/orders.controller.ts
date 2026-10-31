@@ -6,6 +6,8 @@ import {
   ordersQuerySchema,
   type OwnerOrder,
   type Paginated,
+  type TableOccupancy,
+  updateOrderPaymentSchema,
   placeOrderSchema,
   type PlaceOrderResponse,
   type PublicOrder,
@@ -22,25 +24,43 @@ import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
 import { OrderAlertsService } from './order-alerts.service.js';
 import { OrdersService } from './orders.service.js';
 
-/** The restaurant's orders: the live board, history, and status changes. */
+/** The restaurant's orders: the live board, history, and status changes. Kitchen accounts may read and move orders, nothing else. */
 @Controller('orders')
 @UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
 @RequireRole('OWNER')
 export class OrdersController {
   constructor(private readonly orders: OrdersService) {}
 
+  @RequireRole('OWNER', 'KITCHEN')
   @Get()
   @Header('Cache-Control', 'no-store')
   list(@CurrentAuth() auth: AuthContext, @Query(new ZodValidationPipe(ordersQuerySchema)) query: z.output<typeof ordersQuerySchema>): Promise<Paginated<OwnerOrder>> {
     return this.orders.list(auth.userId, query);
   }
 
+  /** Which tables have guests (an unpaid order) right now. Declared before :id. */
+  @Get('floor')
+  @Header('Cache-Control', 'no-store')
+  floor(@CurrentAuth() auth: AuthContext): Promise<TableOccupancy[]> {
+    return this.orders.floor(auth.userId);
+  }
+
+  /** The guests at this table paid: marks its open orders paid. Returns the whole floor. */
+  @Post('tables/:tableId/settle')
+  @HttpCode(HttpStatus.OK)
+  @RateLimit({ name: 'order-status:ip', limit: 600, windowSeconds: 60, by: 'ip' })
+  settleTable(@CurrentAuth() auth: AuthContext, @Param('tableId', new ZodValidationPipe(orderIdParamSchema)) tableId: string): Promise<TableOccupancy[]> {
+    return this.orders.settleTable(auth.userId, tableId);
+  }
+
+  @RequireRole('OWNER', 'KITCHEN')
   @Get(':id')
   @Header('Cache-Control', 'no-store')
   get(@CurrentAuth() auth: AuthContext, @Param('id', new ZodValidationPipe(orderIdParamSchema)) id: string): Promise<OwnerOrder> {
     return this.orders.get(auth.userId, id);
   }
 
+  @RequireRole('OWNER', 'KITCHEN')
   @Patch(':id/status')
   @RateLimit({ name: 'order-status:ip', limit: 600, windowSeconds: 60, by: 'ip' })
   updateStatus(
@@ -49,6 +69,16 @@ export class OrdersController {
     @Body(new ZodValidationPipe(updateOrderStatusSchema)) body: z.output<typeof updateOrderStatusSchema>,
   ): Promise<OwnerOrder> {
     return this.orders.updateStatus(auth.userId, id, body);
+  }
+
+  @Patch(':id/payment')
+  @RateLimit({ name: 'order-status:ip', limit: 600, windowSeconds: 60, by: 'ip' })
+  updatePayment(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', new ZodValidationPipe(orderIdParamSchema)) id: string,
+    @Body(new ZodValidationPipe(updateOrderPaymentSchema)) body: z.output<typeof updateOrderPaymentSchema>,
+  ): Promise<OwnerOrder> {
+    return this.orders.setPaid(auth.userId, id, body.paid);
   }
 }
 

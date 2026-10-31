@@ -62,6 +62,7 @@ describe('the shop checkout', () => {
   it('offers cash, and online payment once a delivery fee is set', async () => {
     expect((await http().get('/v1/public/shop').expect(200)).body).toEqual({
       prices: { unitPiastres: 35000, nfcPiastres: 10000 },
+      stickerPrices: { unitPiastres: 15000, nfcPiastres: 10000 },
       deliveryFeePiastres: null,
       paymentMethods: ['CASH_ON_DELIVERY'],
     });
@@ -139,6 +140,17 @@ describe('the shop checkout', () => {
     expect(tracked.body).toEqual(placed.body.order);
     await http().get('/v1/public/shop/orders/not-a-token').expect(404);
     expect((await http().get('/v1/admin/overview').set(auth(admin)).expect(200)).body.newStandOrders).toBe(1);
+  });
+
+  it('sells stickers at their own price, only in sticker shapes', async () => {
+    const sticker = line({ product: 'sticker', shape: 'circle', nfc: true, quantity: 10 });
+    const placed = await order({ lines: [line(), sticker], expectedTotalPiastres: 4 * 35000 + 10 * 25000 }).expect(201);
+    expect(placed.body.order.lines).toMatchObject([
+      { product: 'stand', shape: 'arch', unitPricePiastres: 35000 },
+      { product: 'sticker', shape: 'circle', nfc: true, quantity: 10, unitPricePiastres: 25000, lineTotalPiastres: 250000 },
+    ]);
+    await order({ lines: [line({ product: 'sticker', shape: 'arch' })], expectedTotalPiastres: 4 * 15000 }).expect(400);
+    await order({ lines: [line({ shape: 'square' })] }).expect(400);
   });
 
   it('refuses what it cannot make or deliver', async () => {

@@ -12,7 +12,8 @@ import {
   STAND_PRICES,
   type StandOrderCheckout,
   type StandPaymentMethod,
-  standUnitPricePiastres,
+  shopUnitPricePiastres,
+  STICKER_PRICES,
   type UploadedLogo,
 } from '@bilhanah/contracts';
 import type { ShopSettings } from '@bilhanah/database';
@@ -62,7 +63,7 @@ export class ShopService {
 
   async info(): Promise<ShopInfo> {
     const settings = await this.settings();
-    return { prices: STAND_PRICES, deliveryFeePiastres: settings.deliveryFeePiastres, paymentMethods: this.paymentMethods(settings) };
+    return { prices: STAND_PRICES, stickerPrices: STICKER_PRICES, deliveryFeePiastres: settings.deliveryFeePiastres, paymentMethods: this.paymentMethods(settings) };
   }
 
   /** Stores a logo for a later order line, re-encoded as PNG (which also drops metadata and anything hidden in the file). */
@@ -82,7 +83,7 @@ export class ShopService {
   }
 
   /**
-   * Places an order. Prices come from STAND_PRICES and the shop settings, never
+   * Places an order. Prices come from STAND_PRICES, STICKER_PRICES and the shop settings, never
    * from the client; a total that differs from the one the customer saw is
    * refused (409 PRICE_CHANGED). Online orders get a Paymob checkout.
    */
@@ -113,7 +114,7 @@ export class ShopService {
       });
     }
 
-    const subtotalPiastres = input.lines.reduce((sum, line) => sum + standUnitPricePiastres(line.nfc) * line.quantity, 0);
+    const subtotalPiastres = input.lines.reduce((sum, line) => sum + shopUnitPricePiastres(line.product, line.nfc) * line.quantity, 0);
     const deliveryFeePiastres = settings.deliveryFeePiastres;
     const totalPiastres = subtotalPiastres + (deliveryFeePiastres ?? 0);
     if (input.expectedTotalPiastres !== totalPiastres) {
@@ -154,6 +155,7 @@ export class ShopService {
           lines: {
             create: input.lines.map((line, index) => ({
               sortOrder: index,
+              product: line.product,
               shape: line.shape,
               nfc: line.nfc,
               design: line.design,
@@ -168,7 +170,7 @@ export class ShopService {
               startNumber: line.startNumber,
               quantity: line.quantity,
               notes: line.notes,
-              unitPricePiastres: standUnitPricePiastres(line.nfc),
+              unitPricePiastres: shopUnitPricePiastres(line.product, line.nfc),
             })),
           },
           events: { create: { status: online ? 'AWAITING_PAYMENT' : 'NEW' } },

@@ -37,6 +37,8 @@ export const ORDER_ERROR_CODES = {
   INVALID_STATUS_CHANGE: 'INVALID_STATUS_CHANGE',
   TABLE_LABEL_TAKEN: 'TABLE_LABEL_TAKEN',
   TABLE_LIMIT_REACHED: 'TABLE_LIMIT_REACHED',
+  /** Rejected and cancelled orders have no bill to pay. */
+  ORDER_NOT_PAYABLE: 'ORDER_NOT_PAYABLE',
 } as const;
 
 export const ORDER_LIMITS = { lines: 30, quantity: 50, tables: 300, bulkTables: 100 } as const;
@@ -102,6 +104,9 @@ export const updateOrderStatusSchema = z
     }
   });
 
+/** PATCH /v1/orders/:id/payment: the bill was paid (or the mark was a mistake). */
+export const updateOrderPaymentSchema = z.strictObject({ paid: z.boolean() });
+
 export const ordersQuerySchema = z.object({
   /** active: the board (oldest first). history: closed orders (newest first). */
   view: z.enum(['active', 'history']).default('active'),
@@ -140,6 +145,8 @@ type OrderCore = {
   completedAt: string | null;
   closedAt: string | null;
   rejectionReason: string | null;
+  /** When the restaurant marked the bill paid; null while unpaid. */
+  paidAt: string | null;
   /** Changes on every update; the newer of two copies has the later value. */
   updatedAt: string;
 };
@@ -185,7 +192,18 @@ export const pushUnsubscribeSchema = z.object({ endpoint: z.string().max(2048) }
 
 // --- Tables -----------------------------------------------------------------
 
-export const createTableSchema = z.strictObject({ label: z.string().trim().min(1).max(40) });
+/** How a table is drawn on the floor plan. */
+export const TABLE_SHAPES = ['ROUND', 'SQUARE', 'RECTANGLE'] as const;
+export type TableShape = (typeof TABLE_SHAPES)[number];
+export const TABLE_SEATS = { min: 1, max: 20, default: 4 } as const;
+const tableShape = z.enum(TABLE_SHAPES);
+const tableSeats = z.number().int().min(TABLE_SEATS.min).max(TABLE_SEATS.max);
+
+export const createTableSchema = z.strictObject({
+  label: z.string().trim().min(1).max(40),
+  shape: tableShape.default('SQUARE'),
+  seats: tableSeats.default(TABLE_SEATS.default),
+});
 
 /** Creates tables "{prefix} {from}" ... "{prefix} {to}" (no space after a prefix ending in a symbol, e.g. "T-"), skipping labels that already exist. */
 export const bulkCreateTablesSchema = z
@@ -193,6 +211,8 @@ export const bulkCreateTablesSchema = z
     from: z.number().int().min(1).max(999),
     to: z.number().int().min(1).max(999),
     prefix: z.string().trim().max(20).default(''),
+    shape: tableShape.default('SQUARE'),
+    seats: tableSeats.default(TABLE_SEATS.default),
   })
   .refine((range) => range.to >= range.from && range.to - range.from < ORDER_LIMITS.bulkTables, {
     message: `Create up to ${ORDER_LIMITS.bulkTables} tables at a time.`,
@@ -202,16 +222,43 @@ export const bulkCreateTablesSchema = z
 export const updateTableSchema = z.strictObject({
   label: z.string().trim().min(1).max(40).optional(),
   isActive: z.boolean().optional(),
+  shape: tableShape.optional(),
+  seats: tableSeats.optional(),
 });
 
 export type RestaurantTable = {
   id: string;
   label: string;
+  shape: TableShape;
+  seats: number;
   publicCode: string;
   isActive: boolean;
   /** The URL printed in this table's QR code. */
   qrUrl: string;
   createdAt: string;
+};
+
+/** Unpaid orders older than this no longer keep a table occupied (a forgotten bill must not block it forever). */
+export const TABLE_OCCUPANCY_HOURS = 12;
+
+/** An order still open on a table: placed, not rejected or cancelled, and not paid. */
+export type TableOpenOrder = { id: string; number: number; status: OrderStatus; subtotalPiastres: number; placedAt: string };
+
+/**
+ * GET /v1/orders/floor: each active table and whether guests are sitting at it. A table is
+ * occupied while it has an unpaid order (placed in the last TABLE_OCCUPANCY_HOURS hours).
+ */
+export type TableOccupancy = {
+  id: string;
+  label: string;
+  shape: TableShape;
+  seats: number;
+  occupied: boolean;
+  /** Oldest first. */
+  openOrders: TableOpenOrder[];
+  unpaidPiastres: number;
+  /** When the oldest open order was placed. */
+  since: string | null;
 };
 
 /** What a diner's phone learns from a table QR code. */
