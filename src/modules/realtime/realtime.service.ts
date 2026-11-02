@@ -19,14 +19,15 @@ import { AccessTokenService } from '../auth/access-token.service.js';
 import { TrackingTokens } from '../orders/tracking-token.js';
 
 const restaurantRoom = (restaurantId: string) => `restaurant:${restaurantId}`;
+const branchRoom = (branchId: string) => `branch:${branchId}`;
 const orderRoom = (orderId: string) => `order:${orderId}`;
 
 /**
  * Live order updates over Socket.IO (WebSocket only, so no sticky sessions
  * are needed). The Redis adapter relays events between API replicas.
  *
- * - /owner: auth { token: accessToken }. Joins the restaurant room of the
- *   owner or kitchen account;
+ * - /owner: auth { token: accessToken }. Owners and all-branch staff join the
+ *   restaurant room (every branch); staff tied to a branch join that branch's room;
  *   disconnected when the token expires, so the client reconnects with a
  *   fresh one and revoked sessions stop receiving events.
  * - /track: auth { token: trackingToken }. Joins that one order's room.
@@ -79,17 +80,21 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
   }
 
   emitOrderCreated(restaurantId: string, order: OwnerOrder): void {
-    this.owners?.to(restaurantRoom(restaurantId)).emit(REALTIME_EVENTS.ORDER_CREATED, { order } satisfies OwnerOrderEvent);
+    this.owners?.to([restaurantRoom(restaurantId), branchRoom(order.branchId)]).emit(REALTIME_EVENTS.ORDER_CREATED, { order } satisfies OwnerOrderEvent);
   }
 
   emitOrderUpdated(restaurantId: string, ownerView: OwnerOrder, publicView: PublicOrder): void {
-    this.owners?.to(restaurantRoom(restaurantId)).emit(REALTIME_EVENTS.ORDER_UPDATED, { order: ownerView } satisfies OwnerOrderEvent);
+    this.owners
+      ?.to([restaurantRoom(restaurantId), branchRoom(ownerView.branchId)])
+      .emit(REALTIME_EVENTS.ORDER_UPDATED, { order: ownerView } satisfies OwnerOrderEvent);
     this.trackers?.to(orderRoom(ownerView.id)).emit(REALTIME_EVENTS.ORDER_UPDATED, { order: publicView } satisfies TrackedOrderEvent);
   }
 
-  /** Tells the owner's other devices that ordering settings changed (e.g. orders paused). */
-  emitRestaurantUpdated(restaurantId: string, ordering: OrderingSettings): void {
-    this.owners?.to(restaurantRoom(restaurantId)).emit(REALTIME_EVENTS.RESTAURANT_UPDATED, { ordering } satisfies RestaurantUpdatedEvent);
+  /** Tells the other devices that a branch's ordering settings changed (e.g. orders paused). */
+  emitRestaurantUpdated(restaurantId: string, branchId: string, ordering: OrderingSettings): void {
+    this.owners
+      ?.to([restaurantRoom(restaurantId), branchRoom(branchId)])
+      .emit(REALTIME_EVENTS.RESTAURANT_UPDATED, { branchId, ordering } satisfies RestaurantUpdatedEvent);
   }
 
   async onApplicationShutdown(): Promise<void> {
@@ -100,21 +105,23 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
   private async authenticateOwner(socket: Socket): Promise<void> {
     const token = socket.handshake.auth['token'];
     const claims = typeof token === 'string' ? await this.accessTokens.verify(token) : null;
-    if (!claims || (claims.role !== 'OWNER' && claims.role !== 'KITCHEN')) throw new Error('UNAUTHENTICATED');
+    if (!claims || claims.role === 'ADMIN') throw new Error('UNAUTHENTICATED');
     const session = await this.prisma.session.findUnique({
       where: { id: claims.sid },
       select: {
         userId: true,
         revokedAt: true,
         expiresAt: true,
-        user: { select: { role: true, status: true, staffRestaurantId: true, restaurant: { select: { id: true } } } },
+        user: { select: { role: true, status: true, staffRestaurantId: true, staffBranchId: true, restaurant: { select: { id: true } } } },
       },
     });
-    const restaurantId = session?.user.role === 'KITCHEN' ? session.user.staffRestaurantId : session?.user.restaurant?.id;
+    const staff = session?.user.role === 'KITCHEN' || session?.user.role === 'MANAGER';
+    const restaurantId = staff ? session.user.staffRestaurantId : session?.user.restaurant?.id;
     if (!session || session.userId !== claims.sub || session.revokedAt || session.expiresAt <= new Date() || session.user.status !== 'ACTIVE' || !restaurantId) {
       throw new Error('UNAUTHENTICATED');
     }
-    await socket.join(restaurantRoom(restaurantId));
+    const branchId = staff ? session.user.staffBranchId : null;
+    await socket.join(branchId ? branchRoom(branchId) : restaurantRoom(restaurantId));
     // End the connection when the access token expires; the client reconnects with a fresh one.
     const timer = setTimeout(() => socket.disconnect(true), Math.max(0, claims.exp * 1000 - Date.now()));
     socket.on('disconnect', () => clearTimeout(timer));

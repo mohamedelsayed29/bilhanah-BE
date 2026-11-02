@@ -16,6 +16,8 @@ import { AdminModule } from './modules/admin/admin.module.js';
 import { AnalyticsModule } from './modules/analytics/analytics.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { BillingModule } from './modules/billing/billing.module.js';
+import { BranchesModule } from './modules/branches/branches.module.js';
+import { BranchScopeModule } from './modules/branches/branch-scope.service.js';
 import { ContactModule } from './modules/contact/contact.module.js';
 import { KitchenModule } from './modules/kitchen/kitchen.module.js';
 import { MediaModule } from './modules/media/media.module.js';
@@ -42,6 +44,8 @@ import { TablesModule } from './modules/tables/tables.module.js';
     EmailModule,
     ObservabilityModule,
     AuthModule,
+    BranchScopeModule,
+    BranchesModule,
     RestaurantsModule,
     MediaModule,
     MenusModule,

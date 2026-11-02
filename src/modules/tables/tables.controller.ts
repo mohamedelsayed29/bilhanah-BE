@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, Header, HttpCode, HttpStatus, Param, Patch, Post, UseGuards } from '@nestjs/common';
-import { bulkCreateTablesSchema, createTableSchema, type PublicTable, type RestaurantTable, updateTableSchema } from '@bilhanah/contracts';
+import { Body, Controller, Delete, Get, Header, HttpCode, HttpStatus, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { branchQuerySchema, bulkCreateTablesSchema, createTableSchema, type PublicTable, type RestaurantTable, updateTableSchema } from '@bilhanah/contracts';
 import { z } from 'zod';
 import { type AuthContext, CurrentAuth } from '../../common/decorators/current-auth.decorator.js';
 import { AccessTokenGuard } from '../../common/guards/access-token.guard.js';
@@ -11,16 +11,17 @@ import { TablesService } from './tables.service.js';
 const idParam = new ZodValidationPipe(z.uuid());
 const WRITE_LIMIT = { name: 'tables-write:ip', limit: 300, windowSeconds: 60, by: 'ip' } as const;
 
+/** Owners manage every branch's tables; managers their own branch's. */
 @Controller('tables')
 @UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
-@RequireRole('OWNER')
+@RequireRole('OWNER', 'MANAGER')
 export class TablesController {
   constructor(private readonly tables: TablesService) {}
 
   @Get()
   @Header('Cache-Control', 'no-store')
-  list(@CurrentAuth() auth: AuthContext): Promise<RestaurantTable[]> {
-    return this.tables.list(auth.userId);
+  list(@CurrentAuth() auth: AuthContext, @Query(new ZodValidationPipe(branchQuerySchema)) query: z.output<typeof branchQuerySchema>): Promise<RestaurantTable[]> {
+    return this.tables.list(auth.userId, query.branchId);
   }
 
   @Post()

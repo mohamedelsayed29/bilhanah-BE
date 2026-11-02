@@ -34,6 +34,8 @@ export type RestaurantStats = {
   topItems: { nameAr: string; nameEn: string | null; quantity: number; revenuePiastres: number }[];
   /** False when the plan has no ordering: the dashboard shows visits only. */
   ordering: boolean;
+  /** The branch the orders figures are for; null for the whole restaurant. Visits are always restaurant-wide. */
+  branchId: string | null;
 };
 
 export type PlatformStatsDay = {

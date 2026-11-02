@@ -10,4 +10,6 @@ export const statsQuerySchema = z.object({
     .int()
     .refine((days) => (STATS_PERIODS as readonly number[]).includes(days), { message: `Use one of ${STATS_PERIODS.join(', ')}.` })
     .default(30),
+  /** One branch; the whole restaurant when omitted (managers always get their branch). */
+  branchId: z.uuid().optional(),
 });

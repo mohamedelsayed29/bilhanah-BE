@@ -5,6 +5,7 @@ import type { ImageSet } from './media.js';
 import type { PublicMenuCategory } from './menus.js';
 import { type OpeningHours, openingHoursSchema } from './opening-hours.js';
 import type { RestaurantAccess } from './plans.js';
+import type { PublicBranch } from './branches.js';
 import { normalizeSubdomain, subdomainProblem, type SubdomainProblem } from './subdomains.js';
 
 export const RESTAURANT_ERROR_CODES = {
@@ -36,13 +37,13 @@ export const subdomainSchema = z
 export const subdomainAvailabilityQuerySchema = z.object({ name: z.string().max(100) });
 
 /** Phone numbers are stored as digits, with an optional leading +. */
-const phoneSchema = z
+export const contactPhoneSchema = z
   .string()
   .trim()
   .transform((value) => value.replace(/[\s().-]/g, ''))
   .pipe(z.string().regex(/^\+?\d{7,15}$/, 'Enter a valid phone number.'));
 
-const optionalUrlSchema = z
+export const optionalUrlSchema = z
   .union([z.literal('').transform(() => null), z.url({ protocol: /^https?$/ }).max(2048)])
   .nullable()
   .optional();
@@ -63,11 +64,11 @@ const timezoneSchema = z
 const restaurantDetails = {
   name: z.string().trim().min(2).max(80),
   contactName: z.string().trim().min(2).max(80),
-  phone: phoneSchema,
+  phone: contactPhoneSchema,
   city: z.string().trim().min(2).max(60),
   address: z.string().trim().min(3).max(200),
   timezone: timezoneSchema.optional(),
-  whatsappNumber: phoneSchema.nullable().optional(),
+  whatsappNumber: contactPhoneSchema.nullable().optional(),
   websiteUrl: optionalUrlSchema,
   facebookUrl: optionalUrlSchema,
   instagramUrl: optionalUrlSchema,
@@ -83,7 +84,7 @@ export const createRestaurantSchema = z.strictObject({
 export const updateRestaurantSchema = z.strictObject({
   name: restaurantDetails.name.optional(),
   contactName: restaurantDetails.contactName.optional(),
-  phone: phoneSchema.optional(),
+  phone: contactPhoneSchema.optional(),
   city: restaurantDetails.city.optional(),
   address: restaurantDetails.address.optional(),
   defaultLanguage: languageSchema.optional(),
@@ -104,7 +105,10 @@ export const updateRestaurantSchema = z.strictObject({
   openingHours: openingHoursSchema.nullable().optional(),
   /** How the public menu looks (see themes.ts). */
   menuTheme: z.enum(MENU_THEMES).optional(),
-  /** Ordering (plans with ordering only): switched on, order types, and a temporary pause. */
+  /**
+   * Ordering (plans with ordering only): switched on, order types, and a temporary pause.
+   * These and openingHours apply to the main branch; other branches are edited at /v1/branches.
+   */
   orderingEnabled: z.boolean().optional(),
   acceptsDineIn: z.boolean().optional(),
   acceptsPickup: z.boolean().optional(),
@@ -153,7 +157,11 @@ export type OwnerRestaurant = {
   instagramUrl: string | null;
   createdAt: string;
   access: RestaurantAccess;
+  /** The main branch's ordering settings (openingHours is the main branch's too). */
   ordering: OrderingSettings;
+  mainBranchId: string;
+  /** Active branches. */
+  branchCount: number;
 } & RestaurantBranding;
 
 export type PublicRestaurant =
@@ -170,7 +178,11 @@ export type PublicRestaurant =
       facebookUrl: string | null;
       instagramUrl: string | null;
       timezone: string;
+      /** The chosen branch's (phone, city, address, openingHours and ordering above are the chosen branch's too). */
       ordering: PublicOrdering;
+      branch: PublicBranch;
+      /** Every active branch, main first; more than one means diners may pick. */
+      branches: PublicBranch[];
     } & RestaurantBranding)
   | { availability: 'TEMPORARILY_UNAVAILABLE'; subdomain: string; name: string; defaultLanguage: Language };
 

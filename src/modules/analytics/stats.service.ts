@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { type PlatformStats, RESTAURANT_ERROR_CODES, type RestaurantStats } from '@bilhanah/contracts';
+import { ForbiddenException, Injectable } from '@nestjs/common';
+import { type BranchComparison, COMMON_ERROR_CODES, type PlatformStats, type RestaurantStats } from '@bilhanah/contracts';
 import { Prisma } from '@bilhanah/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { businessDay } from '../orders/business-day.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
+import { BranchScopeService } from '../branches/branch-scope.service.js';
 import { dayKey, VisitsService } from './visits.service.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -24,17 +25,22 @@ export class StatsService {
     private readonly prisma: PrismaService,
     private readonly visits: VisitsService,
     private readonly subscriptions: SubscriptionsService,
+    private readonly scopes: BranchScopeService,
   ) {}
 
-  async restaurant(ownerId: string, days: number, now = new Date()): Promise<RestaurantStats> {
-    const restaurant = await this.prisma.restaurant.findUnique({ where: { ownerId }, select: { id: true, status: true, timezone: true } });
-    if (!restaurant) throw new NotFoundException({ code: RESTAURANT_ERROR_CODES.RESTAURANT_NOT_FOUND, message: 'Restaurant not found.' });
+  /** The whole restaurant, or one branch's orders (managers always get their branch). Visits are restaurant-wide. */
+  async restaurant(userId: string, days: number, requestedBranchId?: string, now = new Date()): Promise<RestaurantStats> {
+    const scope = await this.scopes.resolve(userId);
+    if (scope.role === 'KITCHEN') throw new ForbiddenException({ code: COMMON_ERROR_CODES.FORBIDDEN, message: 'You do not have permission to do this.' });
+    const restaurant = scope.restaurant;
+    const { branchId } = await this.scopes.branchWhere(scope, requestedBranchId);
     await this.visits.flush(now, restaurant.id);
 
     const dates = periodDays(days, restaurant.timezone, now);
     const from = dates[0]!;
     const to = dates.at(-1)!;
-    const counted = { restaurantId: restaurant.id, businessDay: { gte: from, lte: to }, status: COUNTED_ORDER };
+    const counted = { restaurantId: restaurant.id, ...(branchId && { branchId }), businessDay: { gte: from, lte: to }, status: COUNTED_ORDER };
+    const branchSql = branchId ? Prisma.sql`AND o.branch_id = ${branchId}::uuid` : Prisma.empty;
     const [visitRows, orderRows, typeRows, topItems, access] = await Promise.all([
       this.prisma.restaurantDailyStat.findMany({ where: { restaurantId: restaurant.id, day: { gte: from, lte: to } } }),
       this.prisma.order.groupBy({ by: ['businessDay'], where: counted, _count: { _all: true }, _sum: { subtotalPiastres: true } }),
@@ -43,7 +49,7 @@ export class StatsService {
         SELECT i.name_ar AS "nameAr", i.name_en AS "nameEn", SUM(i.quantity) AS quantity, SUM(i.quantity * i.unit_price_piastres) AS revenue
         FROM order_items i JOIN orders o ON o.id = i.order_id
         WHERE o.restaurant_id = ${restaurant.id}::uuid AND o.business_day BETWEEN ${from} AND ${to}
-          AND o.status NOT IN ('REJECTED', 'CANCELLED')
+          AND o.status NOT IN ('REJECTED', 'CANCELLED') ${branchSql}
         GROUP BY i.name_ar, i.name_en
         ORDER BY quantity DESC, revenue DESC, i.name_ar
         LIMIT 5`,
@@ -68,6 +74,50 @@ export class StatsService {
       },
       topItems: topItems.map((item) => ({ nameAr: item.nameAr, nameEn: item.nameEn, quantity: Number(item.quantity), revenuePiastres: Number(item.revenue) })),
       ordering: access.features.ordering,
+      branchId: branchId ?? null,
+    };
+  }
+
+  /** Every branch side by side over the period: orders, revenue, average ticket, prep time and order types. */
+  async branches(userId: string, days: number, now = new Date()): Promise<BranchComparison> {
+    const scope = await this.scopes.resolve(userId);
+    if (scope.role !== 'OWNER') throw new ForbiddenException({ code: COMMON_ERROR_CODES.FORBIDDEN, message: 'You do not have permission to do this.' });
+    const dates = periodDays(days, scope.restaurant.timezone, now);
+    const from = dates[0]!;
+    const to = dates.at(-1)!;
+    const [branches, rows] = await Promise.all([
+      this.scopes.visibleBranches(scope),
+      this.prisma.$queryRaw<{ branchId: string; orders: bigint; revenue: bigint | null; dineIn: bigint; pickup: bigint; prepMinutes: number | null }[]>`
+        SELECT o.branch_id AS "branchId", COUNT(*) AS orders, SUM(o.subtotal_piastres) AS revenue,
+          COUNT(*) FILTER (WHERE o.type = 'DINE_IN') AS "dineIn", COUNT(*) FILTER (WHERE o.type = 'PICKUP') AS pickup,
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (o.ready_at - o.placed_at)) / 60)
+            FILTER (WHERE o.ready_at IS NOT NULL) AS "prepMinutes"
+        FROM orders o
+        WHERE o.restaurant_id = ${scope.restaurant.id}::uuid AND o.business_day BETWEEN ${from} AND ${to}
+          AND o.status NOT IN ('REJECTED', 'CANCELLED')
+        GROUP BY o.branch_id`,
+    ]);
+    const total = rows.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
+    return {
+      days,
+      branches: branches.map((branch) => {
+        const row = rows.find((candidate) => candidate.branchId === branch.id);
+        const orders = Number(row?.orders ?? 0);
+        const revenuePiastres = Number(row?.revenue ?? 0);
+        return {
+          id: branch.id,
+          name: branch.name,
+          slug: branch.slug,
+          isActive: branch.isActive,
+          orders,
+          revenuePiastres,
+          averageOrderPiastres: orders ? Math.round(revenuePiastres / orders) : 0,
+          medianPrepMinutes: row?.prepMinutes == null ? null : Math.round(Number(row.prepMinutes) * 10) / 10,
+          dineIn: Number(row?.dineIn ?? 0),
+          pickup: Number(row?.pickup ?? 0),
+          revenueShare: total ? revenuePiastres / total : 0,
+        };
+      }),
     };
   }
 

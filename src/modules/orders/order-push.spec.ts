@@ -38,4 +38,9 @@ describe('orderPushPayload', () => {
   it('uses the order id as a 32-character push topic', () => {
     expect(orderPushTopic(base.orderId)).toBe('0b6f2c1e7d1a4a579a8e3f1c2d4e5a6b');
   });
+
+  it('names the branch when the restaurant has several', () => {
+    expect(orderPushPayload({ ...base, status: 'READY', branchName: 'Nasr City' }).title).toBe('Koshary Abou Tarek · Nasr City');
+    expect(orderPushPayload({ ...base, status: 'READY', branchName: null }).title).toBe('Koshary Abou Tarek');
+  });
 });

@@ -192,14 +192,42 @@ Diners order from the public menu without an account; the restaurant handles ord
 | --- | --- |
 | `POST /public/restaurants/:subdomain/orders` + `Idempotency-Key` header | 201 `{ trackingToken, order }`. Names and prices come from the menu (clients send ids, sizes, quantities and notes only). A retry with the same key returns the same order. 409 `ORDERING_UNAVAILABLE`, `RESTAURANT_CLOSED` (opening hours), `ITEMS_UNAVAILABLE` (`details.menuItemIds`); 400 `ORDER_TYPE_UNAVAILABLE`; 404 `TABLE_NOT_FOUND`. Limited to 60 orders per 10 minutes per client IP per restaurant (diners often share the restaurant's Wi-Fi) and 200 per IP overall Dine-in needs `tableCode` (from the table QR) or `tableLabel`; pickup needs `customerPhone` |
 | `GET /public/orders/:trackingToken` | The diner's order and status (no phone number) |
-| `GET /public/restaurants/:subdomain/tables/:code` | `{ label }` of a scanned table |
+| `GET /public/restaurants/:subdomain/tables/:code` | `{ label, branch }` of a scanned table |
 | `GET /orders?view=active\|history` (owner) | The board (oldest first) or closed orders (newest first) |
 | `PATCH /orders/:id/status` `{ status, reason? }` | A reason is required to reject or cancel (shown to the diner). Only the transitions in `ORDER_TRANSITIONS` (PLACED → ACCEPTED/REJECTED → PREPARING → READY → COMPLETED, or CANCELLED); 409 `INVALID_STATUS_CHANGE` otherwise or when another device moved it first |
 | `GET/POST /tables`, `POST /tables/range` `{ from, to, prefix }`, `PATCH`/`DELETE /tables/:id`, `POST /tables/:id/code` | Tables and their QR links (`qrUrl` = `{publicUrl}/?t={code}`); a new code retires printed ones |
 
-Order numbers restart at #1 each day in the restaurant's time zone. Tracking tokens are the order id plus an HMAC, so they cannot be guessed and a retried checkout gets the same link.
+Order numbers restart at #1 each day per branch, in the restaurant's time zone. Ordering switches and opening hours are per branch (see Branches). Tracking tokens are the order id plus an HMAC, so they cannot be guessed and a retried checkout gets the same link.
 
 **Live updates** use Socket.IO at path `/v1/realtime`, WebSocket transport only (no sticky sessions needed behind the load balancer; a Redis adapter relays events between API replicas). Namespace `/owner` with `auth: { token: <access token> }` receives `order.created`, `order.updated` and `restaurant.updated` (ordering settings changed, e.g. paused on another device) for the owner's restaurant and is disconnected when the token expires (reconnect with a fresh one). Namespace `/track` with `auth: { token: <tracking token> }` receives `order.updated` for that order. Clients should also refetch on reconnect.
+
+## Branches
+
+A restaurant is the brand: one subdomain, one shared menu, one subscription, one look. A **branch** is a location with its own contact details, opening hours and ordering switches; tables, orders (numbered per branch and day) and staff belong to a branch. Every restaurant has exactly one **main** branch (diners land there when they do not pick one; a partial unique index enforces it). Existing restaurants got theirs, named "الفرع الرئيسي" with slug `main`, from migration `20261102000000_branches`, which moved their hours, ordering settings, tables, orders and order counters onto it. Schemas: `packages/contracts/src/branches.ts`.
+
+| Route | Who | Result |
+| --- | --- | --- |
+| `GET /branches` | owner, staff | `{ branches, limit, used }`; staff tied to a branch get only theirs |
+| `POST /branches` | owner | `{ name, slug, phone, city, address, whatsappNumber?, mapUrl?, openingHours?, copyTablesFrom? }`. 409 `BRANCH_LIMIT_REACHED` (`details.limit`) or `BRANCH_SLUG_TAKEN` |
+| `GET`/`PATCH /branches/:id` | owner, manager | Managers may change contact details, hours and ordering switches, not `name`, `slug` or `isActive` (403, `details.fields`). `isActive: false` archives (409 `MAIN_BRANCH_LOCKED` for the main branch) |
+| `DELETE /branches/:id` | owner | Only for branches without orders (409 `BRANCH_HAS_ORDERS`: archive instead) or staff (409 `BRANCH_HAS_STAFF`) |
+| `POST /branches/:id/main`, `POST /branches/reorder` `{ ids }` | owner | Moves the main role (the branch must be active); sets the order |
+| `GET /branches/:id/menu` | owner, staff | The shared menu with the branch's `override` and the `effective` result per dish |
+| `PUT /branches/:id/menu/items/:itemId` | owner, manager, kitchen | `{ available?: boolean \| null, hidden?, prices?: [{ variantId, pricePiastres \| null }] }`; kitchen screens may only send `available` |
+| `POST /branches/:id/menu/reset`, `POST /branches/:id/menu/copy-from/:sourceId` | owner (+ manager for reset) | Back to the shared menu; copy another branch's overrides |
+| `GET /restaurants/mine/stats?branchId=`, `GET /restaurants/mine/stats/branches?days=` | owner (manager: own branch only) | Insights for one branch (visits stay restaurant-wide); a side-by-side comparison |
+
+Plans set the allowance of active branches (`PLAN_FEATURES[plan].branches`: Menu 1, Orders 3, Full Experience 10; archived branches do not count). Without access, existing branches stay and new ones wait.
+
+**Overrides.** A branch can mark a shared dish sold out (or back in stock) on its own, hide it, and set its own price per size; everything else follows the shared menu. The public menu, the owner's branch menu and order pricing all go through `src/modules/branches/branch-menu.ts`. Editing a dish keeps its sizes' ids (matched by position), so branch prices survive renames and shared price changes. Override changes bump `menuVersion`, so the cached public menu refreshes at once.
+
+**Diners.** `GET /public/restaurants/:subdomain[/menu]?branch=slug` returns the chosen branch (main when omitted) in `branch`, every active branch in `branches`, and the branch's contact details, hours, ordering and prices in the usual fields; unknown or archived slugs answer 404 `BRANCH_NOT_FOUND`. A branch's own link is `{publicUrl}/?b={slug}`. Orders take `branch` (slug); a `tableCode` decides the branch by itself. The table lookup returns `{ label, branch }`, and tracked orders include `branch`.
+
+**Staff.** `POST/PATCH /kitchen-accounts` take `role` (`KITCHEN` or `MANAGER`) and `branchId` (null: every branch). Changing either signs the account out. Managers run their branch: board, floor, bills, tables, branch menu overrides, branch settings and insights; `GET /kitchen/context` tells a staff screen its role, branch and branches. Every owner and staff query goes through `BranchScopeService` (`src/modules/branches/branch-scope.service.ts`): other restaurants' branch ids answer 404, another branch of the caller's own restaurant 403 `BRANCH_FORBIDDEN`.
+
+**Compatibility.** `PATCH /restaurants/mine` still accepts `openingHours`, `orderingEnabled`, `acceptsDineIn`, `acceptsPickup` and `ordersPaused`, applied to the main branch; `GET /restaurants/mine` reports the main branch's (plus `mainBranchId` and `branchCount`). While a restaurant has one branch, its phone, city, address and WhatsApp stay in step with the branch.
+
+**Live updates.** Owners and all-branch staff join the restaurant's room; staff tied to a branch join that branch's room. `restaurant.updated` carries `{ branchId, ordering }`.
 
 ## Order-ready alerts (Full Experience plan)
 

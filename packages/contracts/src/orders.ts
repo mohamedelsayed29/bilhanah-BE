@@ -3,6 +3,7 @@ import type { ImageSet } from './media.js';
 import { languageSchema } from './common.js';
 import { isPushServiceEndpoint } from './push.js';
 import type { OrderingSettings } from './restaurants.js';
+import { BRANCH_SLUG_PATTERN } from './branches.js';
 
 export const ORDER_TYPES = ['DINE_IN', 'PICKUP'] as const;
 export type OrderType = (typeof ORDER_TYPES)[number];
@@ -74,6 +75,8 @@ export const placeOrderSchema = z
   .strictObject({
     type: z.enum(ORDER_TYPES),
     tableCode: z.string().trim().min(4).max(16).optional(),
+    /** The branch's slug; the main branch when omitted. A table code decides the branch by itself. */
+    branch: z.string().trim().toLowerCase().max(40).regex(BRANCH_SLUG_PATTERN).optional(),
     tableLabel: optionalText(40),
     customerName: z.string().trim().min(2).max(60),
     customerPhone: customerPhoneSchema.optional(),
@@ -112,7 +115,12 @@ export const ordersQuerySchema = z.object({
   view: z.enum(['active', 'history']).default('active'),
   page: z.coerce.number().int().min(1).max(10_000).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(50),
+  /** One branch; every branch the caller may see when omitted. */
+  branchId: z.uuid().optional(),
 });
+
+/** GET /v1/orders/floor?branchId= and the table routes: one branch, the main one (or the staff account's) when omitted. */
+export const branchQuerySchema = z.object({ branchId: z.uuid().optional() });
 
 export const orderIdParamSchema = z.uuid();
 export const trackingTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{20,80}\.[A-Za-z0-9_-]{16,64}$/);
@@ -154,6 +162,8 @@ type OrderCore = {
 /** An order as the restaurant sees it. */
 export type OwnerOrder = OrderCore & {
   id: string;
+  branchId: string;
+  branchName: string;
   customerPhone: string | null;
   /** The diner turned on Web Push for this order, so they hear when it is ready. */
   notifiesDiner: boolean;
@@ -161,7 +171,9 @@ export type OwnerOrder = OrderCore & {
 
 /** An order as the diner sees it on the tracking page. */
 export type PublicOrder = OrderCore & {
+  /** phone is the branch's. */
   restaurant: { name: string; subdomain: string; phone: string; logo: ImageSet | null; brandColor: string | null };
+  branch: { slug: string; name: string; phone: string; city: string; address: string; mapUrl: string | null; isMain: boolean };
 };
 
 export type PlaceOrderResponse = { trackingToken: string; order: PublicOrder };
@@ -200,6 +212,8 @@ const tableShape = z.enum(TABLE_SHAPES);
 const tableSeats = z.number().int().min(TABLE_SEATS.min).max(TABLE_SEATS.max);
 
 export const createTableSchema = z.strictObject({
+  /** The main branch (or the manager's) when omitted. */
+  branchId: z.uuid().optional(),
   label: z.string().trim().min(1).max(40),
   shape: tableShape.default('SQUARE'),
   seats: tableSeats.default(TABLE_SEATS.default),
@@ -208,6 +222,7 @@ export const createTableSchema = z.strictObject({
 /** Creates tables "{prefix} {from}" ... "{prefix} {to}" (no space after a prefix ending in a symbol, e.g. "T-"), skipping labels that already exist. */
 export const bulkCreateTablesSchema = z
   .strictObject({
+    branchId: z.uuid().optional(),
     from: z.number().int().min(1).max(999),
     to: z.number().int().min(1).max(999),
     prefix: z.string().trim().max(20).default(''),
@@ -228,6 +243,7 @@ export const updateTableSchema = z.strictObject({
 
 export type RestaurantTable = {
   id: string;
+  branchId: string;
   label: string;
   shape: TableShape;
   seats: number;
@@ -262,7 +278,8 @@ export type TableOccupancy = {
 };
 
 /** What a diner's phone learns from a table QR code. */
-export type PublicTable = { label: string };
+/** What a diner's phone learns from a table QR code: the table, and the branch it stands in. */
+export type PublicTable = { label: string; branch: string };
 
 // --- Realtime ---------------------------------------------------------------
 
@@ -283,4 +300,5 @@ export const REALTIME_EVENTS = {
 
 export type OwnerOrderEvent = { order: OwnerOrder };
 export type TrackedOrderEvent = { order: PublicOrder };
-export type RestaurantUpdatedEvent = { ordering: OrderingSettings };
+/** Ordering settings of one branch changed. */
+export type RestaurantUpdatedEvent = { branchId: string; ordering: OrderingSettings };

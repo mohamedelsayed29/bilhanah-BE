@@ -133,7 +133,7 @@ Full Experience plan.
 
 ## Phase 13: Growing restaurants and chains
 
-- **Multiple branches per owner.** One menu shared across branches, with prices and availability overridable per branch, a branch picker, and a combined dashboard. This removes the one-restaurant-per-owner limit (`Restaurant.ownerId @unique`).
+- **Multiple branches per owner.** *Built (2026-11-02, see README → Branches).* One menu shared across branches, with prices and availability overridable per branch, a branch picker, a combined dashboard, branch managers, and a branch comparison. Branches live inside the one restaurant, so `Restaurant.ownerId @unique` stays.
 - **Custom domain** (`menu.myrestaurant.com`) with automatic HTTPS through Caddy on-demand TLS.
 - **Deeper analytics:**
   - busiest hours and weekdays (heatmap)

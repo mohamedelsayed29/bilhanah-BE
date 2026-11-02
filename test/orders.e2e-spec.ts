@@ -274,7 +274,7 @@ describe('tables', () => {
     const symbols = await http().post('/v1/tables/range').set(auth(menu.token)).send({ from: 1, to: 2, prefix: 'T-' }).expect(201);
     expect(symbols.body.map((row: { label: string }) => row.label).slice(-2)).toEqual(['T-1', 'T-2']);
 
-    expect((await http().get(`/v1/public/restaurants/koshary/tables/${table.body.publicCode}`).expect(200)).body).toEqual({ label: 'Table 1' });
+    expect((await http().get(`/v1/public/restaurants/koshary/tables/${table.body.publicCode}`).expect(200)).body).toEqual({ label: 'Table 1', branch: 'main' });
     const order = await placeOrder(menu, { type: 'DINE_IN', tableCode: table.body.publicCode, customerPhone: undefined }).expect(201);
     expect(order.body.order.tableLabel).toBe('Table 1');
 
@@ -377,7 +377,7 @@ describe('live updates', () => {
     await placeOrder(menu).expect(201);
     // Yesterday's counter does not affect today's numbers.
     await t.prisma.orderCounter.create({
-      data: { restaurantId: menu.restaurantId, businessDay: new Date(Date.now() - DAY_MS), lastNumber: 99 },
+      data: { branchId: (await t.prisma.branch.findFirstOrThrow({ where: { restaurantId: menu.restaurantId, isMain: true } })).id, businessDay: new Date(Date.now() - DAY_MS), lastNumber: 99 },
     });
     expect((await placeOrder(menu).expect(201)).body.order.number).toBe(2);
   });

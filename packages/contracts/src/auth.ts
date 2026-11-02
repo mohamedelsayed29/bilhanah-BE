@@ -11,7 +11,7 @@ export const AUTH_ERROR_CODES = {
   ORIGIN_NOT_ALLOWED: 'ORIGIN_NOT_ALLOWED',
 } as const;
 
-export const userRoleSchema = z.enum(['OWNER', 'ADMIN', 'KITCHEN']);
+export const userRoleSchema = z.enum(['OWNER', 'ADMIN', 'KITCHEN', 'MANAGER']);
 export type UserRole = z.infer<typeof userRoleSchema>;
 
 /** Restaurant-owner password. Administrators have a longer minimum (see the backend admin command). */

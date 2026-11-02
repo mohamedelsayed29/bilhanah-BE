@@ -1,7 +1,7 @@
 import { PLAN_FEATURES, type PlanFeatures, type RestaurantAccess } from '@bilhanah/contracts';
 import type { Entitlement, RestaurantStatus } from '@bilhanah/database';
 
-const NO_FEATURES: PlanFeatures = { menu: false, ordering: false, readyAlerts: false };
+const NO_FEATURES: PlanFeatures = { menu: false, ordering: false, readyAlerts: false, branches: 0 };
 
 type EntitlementPeriod = Pick<Entitlement, 'kind' | 'planCode' | 'startsAt' | 'endsAt'>;
 

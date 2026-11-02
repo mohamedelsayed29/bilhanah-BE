@@ -23,6 +23,9 @@ import type { z } from 'zod';
 import { isUniqueViolation } from '../../infrastructure/database/prisma-errors.js';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { MediaService } from '../media/media.service.js';
+import { effectiveItem } from '../branches/branch-menu.js';
+import { BranchScopeService, branchNotFound } from '../branches/branch-scope.service.js';
+import { MenusService } from '../menus/menus.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { hasAccess } from '../subscriptions/access.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
@@ -33,6 +36,7 @@ import { TrackingTokens } from './tracking-token.js';
 const orderInclude = {
   items: { orderBy: { sortOrder: 'asc' } },
   restaurant: { select: { name: true, subdomain: true, phone: true, brandColor: true, logo: true } },
+  branch: { select: { id: true, name: true, slug: true, phone: true, city: true, address: true, mapUrl: true, isMain: true } },
   _count: { select: { pushSubscriptions: true } },
 } satisfies Prisma.OrderInclude;
 
@@ -67,6 +71,8 @@ export class OrdersService {
     private readonly realtime: RealtimeService,
     private readonly trackingTokens: TrackingTokens,
     private readonly alerts: OrderAlertsService,
+    private readonly scopes: BranchScopeService,
+    private readonly menus: MenusService,
   ) {}
 
   // --- Diners --------------------------------------------------------------
@@ -87,28 +93,37 @@ export class OrdersService {
     });
     if (existing) return this.placed(existing);
 
-    const access = await this.subscriptions.accessFor(restaurant, now);
-    if (!hasAccess(access) || !access.features.ordering || !restaurant.orderingEnabled || restaurant.ordersPaused) {
-      throw new ConflictException({ code: ORDER_ERROR_CODES.ORDERING_UNAVAILABLE, message: 'This restaurant is not taking orders right now.' });
-    }
-    if ((input.type === 'DINE_IN' && !restaurant.acceptsDineIn) || (input.type === 'PICKUP' && !restaurant.acceptsPickup)) {
-      throw new BadRequestException({ code: ORDER_ERROR_CODES.ORDER_TYPE_UNAVAILABLE, message: 'This restaurant does not take this kind of order.' });
-    }
-    const hours = restaurant.openingHours as OpeningHours | null;
-    if (hours && Object.values(hours).some((ranges) => ranges.length) && !isOpenAt(hours, now, restaurant.timezone)) {
-      throw new ConflictException({ code: ORDER_ERROR_CODES.RESTAURANT_CLOSED, message: 'The restaurant is closed right now.' });
-    }
-
-    let table: { id: string; label: string } | null = null;
+    // A table QR code decides the branch; otherwise the chosen branch, or the main one.
+    let table: { id: string; label: string; branchId: string } | null = null;
     if (input.type === 'DINE_IN' && input.tableCode) {
       table = await this.prisma.table.findFirst({
         where: { publicCode: input.tableCode, restaurantId: restaurant.id, isActive: true },
-        select: { id: true, label: true },
+        select: { id: true, label: true, branchId: true },
       });
       if (!table) throw new NotFoundException({ code: ORDER_ERROR_CODES.TABLE_NOT_FOUND, message: 'This table was not found. Scan the QR code again.' });
     }
+    const branch = await this.prisma.branch.findFirst({
+      where: {
+        restaurantId: restaurant.id,
+        isActive: true,
+        ...(table ? { id: table.branchId } : input.branch ? { slug: input.branch } : { isMain: true }),
+      },
+    });
+    if (!branch) throw branchNotFound();
 
-    const lines = await this.priceLines(restaurant.id, input.items);
+    const access = await this.subscriptions.accessFor(restaurant, now);
+    if (!hasAccess(access) || !access.features.ordering || !branch.orderingEnabled || branch.ordersPaused) {
+      throw new ConflictException({ code: ORDER_ERROR_CODES.ORDERING_UNAVAILABLE, message: 'This branch is not taking orders right now.' });
+    }
+    if ((input.type === 'DINE_IN' && !branch.acceptsDineIn) || (input.type === 'PICKUP' && !branch.acceptsPickup)) {
+      throw new BadRequestException({ code: ORDER_ERROR_CODES.ORDER_TYPE_UNAVAILABLE, message: 'This branch does not take this kind of order.' });
+    }
+    const hours = branch.openingHours as OpeningHours | null;
+    if (hours && Object.values(hours).some((ranges) => ranges.length) && !isOpenAt(hours, now, restaurant.timezone)) {
+      throw new ConflictException({ code: ORDER_ERROR_CODES.RESTAURANT_CLOSED, message: 'This branch is closed right now.' });
+    }
+
+    const lines = await this.priceLines(restaurant.id, branch.id, input.items);
     const subtotalPiastres = lines.reduce((sum, line) => sum + line.unitPricePiastres * line.quantity, 0);
     const day = businessDay(now, restaurant.timezone);
 
@@ -116,13 +131,14 @@ export class OrdersService {
     try {
       order = await this.prisma.$transaction(async (tx) => {
         const [counter] = await tx.$queryRaw<{ last_number: number }[]>`
-          INSERT INTO order_counters (restaurant_id, business_day, last_number)
-          VALUES (${restaurant.id}::uuid, ${day}::date, 1)
-          ON CONFLICT (restaurant_id, business_day) DO UPDATE SET last_number = order_counters.last_number + 1
+          INSERT INTO order_counters (branch_id, business_day, last_number)
+          VALUES (${branch.id}::uuid, ${day}::date, 1)
+          ON CONFLICT (branch_id, business_day) DO UPDATE SET last_number = order_counters.last_number + 1
           RETURNING last_number`;
         return tx.order.create({
           data: {
             restaurantId: restaurant.id,
+            branchId: branch.id,
             number: counter!.last_number,
             businessDay: day,
             type: input.type,
@@ -163,11 +179,11 @@ export class OrdersService {
 
   // --- Restaurants ---------------------------------------------------------
 
-  async list(ownerId: string, query: z.output<typeof ordersQuerySchema>): Promise<Paginated<OwnerOrder>> {
-    const restaurantId = await this.restaurantIdFor(ownerId);
+  async list(userId: string, query: z.output<typeof ordersQuerySchema>): Promise<Paginated<OwnerOrder>> {
+    const scope = await this.scopes.resolve(userId);
     const active = query.view === 'active';
     const where: Prisma.OrderWhereInput = {
-      restaurantId,
+      ...(await this.scopes.branchWhere(scope, query.branchId)),
       status: active ? { in: [...ACTIVE_ORDER_STATUSES] } : { notIn: [...ACTIVE_ORDER_STATUSES] },
     };
     const [items, total] = await Promise.all([
@@ -184,17 +200,17 @@ export class OrdersService {
     return { items: items.map((order) => this.toOwnerOrder(order)), total, page: query.page, pageSize: query.pageSize };
   }
 
-  async get(ownerId: string, orderId: string): Promise<OwnerOrder> {
-    const restaurantId = await this.restaurantIdFor(ownerId);
-    const order = await this.prisma.order.findFirst({ where: { id: orderId, restaurantId }, include: orderInclude });
+  async get(userId: string, orderId: string): Promise<OwnerOrder> {
+    const order = await this.prisma.order.findFirst({ where: { id: orderId, ...(await this.ownWhere(userId)) }, include: orderInclude });
     if (!order) throw orderNotFound();
     return this.toOwnerOrder(order);
   }
 
   /** Moves an order along; only the transitions in ORDER_TRANSITIONS are allowed. */
-  async updateStatus(ownerId: string, orderId: string, input: z.output<typeof updateOrderStatusSchema>): Promise<OwnerOrder> {
-    const restaurantId = await this.restaurantIdFor(ownerId);
-    const current = await this.prisma.order.findFirst({ where: { id: orderId, restaurantId }, select: { status: true } });
+  async updateStatus(userId: string, orderId: string, input: z.output<typeof updateOrderStatusSchema>): Promise<OwnerOrder> {
+    const own = await this.ownWhere(userId);
+    const restaurantId = own.restaurantId;
+    const current = await this.prisma.order.findFirst({ where: { id: orderId, ...own }, select: { status: true } });
     if (!current) throw orderNotFound();
     const allowed = ORDER_TRANSITIONS[current.status];
     if (!allowed.includes(input.status)) {
@@ -233,14 +249,15 @@ export class OrdersService {
   }
 
   /** Marks the bill paid or, to undo a mistake, unpaid. */
-  async setPaid(ownerId: string, orderId: string, paid: boolean): Promise<OwnerOrder> {
-    const restaurantId = await this.restaurantIdFor(ownerId);
-    const current = await this.prisma.order.findFirst({ where: { id: orderId, restaurantId }, select: { status: true, paidAt: true } });
+  async setPaid(userId: string, orderId: string, paid: boolean): Promise<OwnerOrder> {
+    const own = await this.ownWhere(userId);
+    const restaurantId = own.restaurantId;
+    const current = await this.prisma.order.findFirst({ where: { id: orderId, ...own }, select: { status: true, paidAt: true } });
     if (!current) throw orderNotFound();
     if (paid && UNBILLED_STATUSES.includes(current.status)) {
       throw new ConflictException({ code: ORDER_ERROR_CODES.ORDER_NOT_PAYABLE, message: 'A rejected or cancelled order has nothing to pay.' });
     }
-    if (paid === Boolean(current.paidAt)) return this.get(ownerId, orderId);
+    if (paid === Boolean(current.paidAt)) return this.get(userId, orderId);
     const order = await this.prisma.order.update({ where: { id: orderId }, data: { paidAt: paid ? new Date() : null }, include: orderInclude });
     const ownerView = this.toOwnerOrder(order);
     this.realtime.emitOrderUpdated(restaurantId, ownerView, this.toPublicOrder(order));
@@ -248,12 +265,14 @@ export class OrdersService {
   }
 
   /** Every active table and the unpaid orders keeping it occupied. */
-  async floor(ownerId: string, now = new Date()): Promise<TableOccupancy[]> {
-    const restaurantId = await this.restaurantIdFor(ownerId);
+  /** One branch's floor: the requested one, the staff account's, or the main branch. */
+  async floor(userId: string, branchId?: string, now = new Date()): Promise<TableOccupancy[]> {
+    const scope = await this.scopes.resolve(userId);
+    const branch = await this.scopes.branch(scope, branchId);
     const [tables, open] = await Promise.all([
-      this.prisma.table.findMany({ where: { restaurantId, isActive: true }, orderBy: { sortOrder: 'asc' }, select: { id: true, label: true, shape: true, seats: true } }),
+      this.prisma.table.findMany({ where: { branchId: branch.id, isActive: true }, orderBy: { sortOrder: 'asc' }, select: { id: true, label: true, shape: true, seats: true } }),
       this.prisma.order.findMany({
-        where: this.openOnTableWhere(restaurantId, now),
+        where: this.openOnTableWhere(branch.id, now),
         orderBy: { placedAt: 'asc' },
         select: { id: true, number: true, status: true, subtotalPiastres: true, placedAt: true, tableId: true, tableLabel: true },
       }),
@@ -281,12 +300,13 @@ export class OrdersService {
   }
 
   /** The guests paid and left: marks every open order on the table paid, freeing it. */
-  async settleTable(ownerId: string, tableId: string, now = new Date()): Promise<TableOccupancy[]> {
-    const restaurantId = await this.restaurantIdFor(ownerId);
-    const table = await this.prisma.table.findFirst({ where: { id: tableId, restaurantId }, select: { id: true, label: true } });
+  async settleTable(userId: string, tableId: string, now = new Date()): Promise<TableOccupancy[]> {
+    const own = await this.ownWhere(userId);
+    const restaurantId = own.restaurantId;
+    const table = await this.prisma.table.findFirst({ where: { id: tableId, ...own }, select: { id: true, label: true, branchId: true } });
     if (!table) throw new NotFoundException({ code: ORDER_ERROR_CODES.TABLE_NOT_FOUND, message: 'Table not found.' });
     const where: Prisma.OrderWhereInput = {
-      ...this.openOnTableWhere(restaurantId, now),
+      ...this.openOnTableWhere(table.branchId, now),
       OR: [{ tableId: table.id }, { tableId: null, tableLabel: table.label }],
     };
     const ids = (await this.prisma.order.findMany({ where, select: { id: true } })).map((order) => order.id);
@@ -295,7 +315,7 @@ export class OrdersService {
       const orders = await this.prisma.order.findMany({ where: { id: { in: ids } }, include: orderInclude });
       for (const order of orders) this.realtime.emitOrderUpdated(restaurantId, this.toOwnerOrder(order), this.toPublicOrder(order));
     }
-    return this.floor(ownerId, now);
+    return this.floor(userId, table.branchId, now);
   }
 
   /** Something about the order changed without a status change (a diner turned alerts on or off): bump it and tell the board. */
@@ -307,18 +327,26 @@ export class OrdersService {
   // --- Helpers -------------------------------------------------------------
 
   /** Current names and prices for the ordered dishes; rejects dishes that are sold out, hidden or gone. */
-  private async priceLines(restaurantId: string, items: z.output<typeof placeOrderSchema>['items']) {
-    const menuItems = await this.prisma.menuItem.findMany({
-      where: {
-        id: { in: [...new Set(items.map((item) => item.menuItemId))] },
-        restaurantId,
-        isVisible: true,
-        isAvailable: true,
-        category: { isVisible: true },
-      },
-      include: { variants: true },
-    });
-    const byId = new Map(menuItems.map((item) => [item.id, item]));
+  /** Current names and the branch's prices; rejects dishes sold out or hidden (shared or at this branch) or gone. */
+  private async priceLines(restaurantId: string, branchId: string, items: z.output<typeof placeOrderSchema>['items']) {
+    const [menuItems, overrides] = await Promise.all([
+      this.prisma.menuItem.findMany({
+        where: {
+          id: { in: [...new Set(items.map((item) => item.menuItemId))] },
+          restaurantId,
+          isVisible: true,
+          category: { isVisible: true },
+        },
+        include: { variants: true },
+      }),
+      this.menus.branchOverrides(branchId),
+    ]);
+    const byId = new Map(
+      menuItems.flatMap((item) => {
+        const effective = effectiveItem(item, overrides);
+        return effective.visible && effective.available ? [[item.id, { ...item, variants: item.variants.map((variant, index) => ({ ...variant, pricePiastres: effective.variants[index]!.pricePiastres })) }] as const] : [];
+      }),
+    );
     const unavailable = new Set<string>();
     const lines = items.flatMap((line) => {
       const menuItem = byId.get(line.menuItemId);
@@ -352,9 +380,9 @@ export class OrdersService {
   }
 
   /** Dine-in orders still on the bill: unpaid, not rejected or cancelled, and recent enough to count. */
-  private openOnTableWhere(restaurantId: string, now: Date): Prisma.OrderWhereInput {
+  private openOnTableWhere(branchId: string, now: Date): Prisma.OrderWhereInput {
     return {
-      restaurantId,
+      branchId,
       type: 'DINE_IN',
       paidAt: null,
       status: { notIn: UNBILLED_STATUSES },
@@ -362,15 +390,9 @@ export class OrdersService {
     };
   }
 
-  /** The restaurant of an owner, or of a kitchen account. */
-  private async restaurantIdFor(userId: string): Promise<string> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { role: true, staffRestaurantId: true, restaurant: { select: { id: true } } },
-    });
-    const restaurantId = user?.role === 'KITCHEN' ? user.staffRestaurantId : user?.restaurant?.id;
-    if (!restaurantId) throw restaurantNotFound();
-    return restaurantId;
+  /** Orders the caller may touch: their restaurant's, and only their branch's when tied to one. */
+  private async ownWhere(userId: string): Promise<{ restaurantId: string; branchId?: string }> {
+    return this.scopes.branchWhere(await this.scopes.resolve(userId));
   }
 
   private placed(order: OrderRow): PlaceOrderResponse {
@@ -410,7 +432,14 @@ export class OrdersService {
   }
 
   private toOwnerOrder(order: OrderRow): OwnerOrder {
-    return { id: order.id, customerPhone: order.customerPhone, notifiesDiner: order._count.pushSubscriptions > 0, ...this.core(order) };
+    return {
+      id: order.id,
+      branchId: order.branch.id,
+      branchName: order.branch.name,
+      customerPhone: order.customerPhone,
+      notifiesDiner: order._count.pushSubscriptions > 0,
+      ...this.core(order),
+    };
   }
 
   private toPublicOrder(order: OrderRow): PublicOrder {
@@ -419,9 +448,19 @@ export class OrdersService {
       restaurant: {
         name: order.restaurant.name,
         subdomain: order.restaurant.subdomain,
-        phone: order.restaurant.phone,
+        // Diners call the branch that has their order.
+        phone: order.branch.phone,
         brandColor: order.restaurant.brandColor,
         logo: order.restaurant.logo ? this.media.toImageSet(order.restaurant.logo) : null,
+      },
+      branch: {
+        slug: order.branch.slug,
+        name: order.branch.name,
+        phone: order.branch.phone,
+        city: order.branch.city,
+        address: order.branch.address,
+        mapUrl: order.branch.mapUrl,
+        isMain: order.branch.isMain,
       },
     };
   }

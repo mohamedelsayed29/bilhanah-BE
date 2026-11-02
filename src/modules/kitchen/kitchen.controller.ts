@@ -69,10 +69,10 @@ export class KitchenAccountsController {
   }
 }
 
-/** What the kitchen screen itself reads. */
+/** What a staff account's screen reads about its restaurant and branch. */
 @Controller('kitchen')
 @UseGuards(AccessTokenGuard, RolesGuard)
-@RequireRole('KITCHEN')
+@RequireRole('KITCHEN', 'MANAGER')
 export class KitchenController {
   constructor(private readonly kitchen: KitchenService) {}
 

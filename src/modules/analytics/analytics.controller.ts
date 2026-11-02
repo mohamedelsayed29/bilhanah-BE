@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Header, HttpCode, HttpStatus, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
-import { type PlatformStats, recordVisitSchema, type RestaurantStats, statsQuerySchema } from '@bilhanah/contracts';
+import { type BranchComparison, type PlatformStats, recordVisitSchema, type RestaurantStats, statsQuerySchema } from '@bilhanah/contracts';
 import type { Request } from 'express';
 import type { z } from 'zod';
 import { type AuthContext, CurrentAuth } from '../../common/decorators/current-auth.decorator.js';
@@ -30,7 +30,7 @@ export class VisitsController {
 
 @Controller('restaurants/mine/stats')
 @UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
-@RequireRole('OWNER')
+@RequireRole('OWNER', 'MANAGER')
 export class RestaurantStatsController {
   constructor(private readonly stats: StatsService) {}
 
@@ -38,7 +38,15 @@ export class RestaurantStatsController {
   @Header('Cache-Control', 'no-store')
   @RateLimit({ name: 'stats:ip', limit: 120, windowSeconds: 60, by: 'ip' })
   get(@CurrentAuth() auth: AuthContext, @Query(new ZodValidationPipe(statsQuerySchema)) query: z.output<typeof statsQuerySchema>): Promise<RestaurantStats> {
-    return this.stats.restaurant(auth.userId, query.days);
+    return this.stats.restaurant(auth.userId, query.days, query.branchId);
+  }
+
+  @Get('branches')
+  @RequireRole('OWNER')
+  @Header('Cache-Control', 'no-store')
+  @RateLimit({ name: 'stats:ip', limit: 120, windowSeconds: 60, by: 'ip' })
+  branches(@CurrentAuth() auth: AuthContext, @Query(new ZodValidationPipe(statsQuerySchema)) query: z.output<typeof statsQuerySchema>): Promise<BranchComparison> {
+    return this.stats.branches(auth.userId, query.days);
   }
 }
 

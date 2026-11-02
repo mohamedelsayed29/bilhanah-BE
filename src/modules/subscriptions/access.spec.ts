@@ -11,7 +11,7 @@ describe('resolveAccess', () => {
     expect(resolveAccess('ACTIVE', [trial], now)).toEqual({
       status: 'TRIAL',
       planCode: 'ADVANCED',
-      features: { menu: true, ordering: true, readyAlerts: true },
+      features: { menu: true, ordering: true, readyAlerts: true, branches: 10 },
       currentPeriodEndsAt: at(20).toISOString(),
       trialEndsAt: at(20).toISOString(),
     });
@@ -26,7 +26,7 @@ describe('resolveAccess', () => {
     expect(resolveAccess('ACTIVE', [], now)).toMatchObject({
       status: 'INACTIVE',
       planCode: null,
-      features: { menu: false, ordering: false, readyAlerts: false },
+      features: { menu: false, ordering: false, readyAlerts: false, branches: 0 },
       trialEndsAt: null,
     });
   });
@@ -36,7 +36,7 @@ describe('resolveAccess', () => {
     expect(resolveAccess('ACTIVE', [trial, paid], at(25))).toMatchObject({
       status: 'PAID',
       planCode: 'MENU',
-      features: { menu: true, ordering: false, readyAlerts: false },
+      features: { menu: true, ordering: false, readyAlerts: false, branches: 1 },
     });
   });
 

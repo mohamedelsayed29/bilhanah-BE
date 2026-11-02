@@ -5,12 +5,14 @@ export type PlanFeatures = {
   menu: boolean;
   ordering: boolean;
   readyAlerts: boolean;
+  /** How many active branches the plan allows. */
+  branches: number;
 };
 
 export const PLAN_FEATURES: Record<PlanCode, PlanFeatures> = {
-  MENU: { menu: true, ordering: false, readyAlerts: false },
-  ORDERS: { menu: true, ordering: true, readyAlerts: false },
-  ADVANCED: { menu: true, ordering: true, readyAlerts: true },
+  MENU: { menu: true, ordering: false, readyAlerts: false, branches: 1 },
+  ORDERS: { menu: true, ordering: true, readyAlerts: false, branches: 3 },
+  ADVANCED: { menu: true, ordering: true, readyAlerts: true, branches: 10 },
 };
 
 export type AccessStatus = 'TRIAL' | 'PAID' | 'INACTIVE' | 'SUSPENDED';

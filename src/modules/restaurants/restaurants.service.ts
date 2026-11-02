@@ -1,6 +1,8 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  MAIN_BRANCH_SLUG,
+  type PublicBranch,
   DEFAULT_MENU_THEME,
   isMenuTheme,
   AUTH_ERROR_CODES,
@@ -18,7 +20,7 @@ import {
   subdomainProblem,
   type updateRestaurantSchema,
 } from '@bilhanah/contracts';
-import { Prisma } from '@bilhanah/database';
+import { type Branch, Prisma } from '@bilhanah/database';
 import type { z } from 'zod';
 import type { Env } from '../../config/env.schema.js';
 import { isUniqueViolation } from '../../infrastructure/database/prisma-errors.js';
@@ -27,10 +29,19 @@ import { MediaService } from '../media/media.service.js';
 import { MenusService } from '../menus/menus.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { hasAccess } from '../subscriptions/access.js';
+import { BranchScopeService, branchNotFound } from '../branches/branch-scope.service.js';
+import { orderingSettings } from '../branches/branches.service.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
 
 const withBranding = { logo: true, cover: true } satisfies Prisma.RestaurantInclude;
 type RestaurantRow = Prisma.RestaurantGetPayload<{ include: typeof withBranding }>;
+
+/** Settings that belong to a branch; sent to /restaurants/mine they apply to the main branch. */
+const MAIN_BRANCH_FIELDS = ['openingHours', 'orderingEnabled', 'acceptsDineIn', 'acceptsPickup', 'ordersPaused'] as const;
+/** Contact details a single-branch restaurant keeps in step with its only branch. */
+const MIRRORED_FIELDS = ['phone', 'city', 'address', 'whatsappNumber'] as const;
+
+const hoursOf = (branch: Branch) => branch.openingHours as OpeningHours | null;
 
 const notFound = () =>
   new NotFoundException({ code: RESTAURANT_ERROR_CODES.RESTAURANT_NOT_FOUND, message: 'Restaurant not found.' });
@@ -61,6 +72,7 @@ export class RestaurantsService {
     private readonly media: MediaService,
     private readonly menus: MenusService,
     private readonly realtime: RealtimeService,
+    private readonly scopes: BranchScopeService,
     config: ConfigService<Env, true>,
   ) {
     this.urlTemplate = config.get('RESTAURANT_URL_TEMPLATE', { infer: true });
@@ -74,7 +86,7 @@ export class RestaurantsService {
     return existing ? { subdomain, available: false, reason: 'TAKEN' } : { subdomain, available: true };
   }
 
-  /** Creates the owner's only restaurant and starts the automatic trial. */
+  /** Creates the owner's restaurant with its main branch, and starts the automatic trial. */
   async create(ownerId: string, input: z.output<typeof createRestaurantSchema>): Promise<OwnerRestaurant> {
     const owner = await this.prisma.user.findUniqueOrThrow({
       where: { id: ownerId },
@@ -92,6 +104,19 @@ export class RestaurantsService {
     try {
       const restaurant = await this.prisma.$transaction(async (tx) => {
         const created = await tx.restaurant.create({ data: { ...input, ownerId }, include: withBranding });
+        await tx.branch.create({
+          data: {
+            restaurantId: created.id,
+            name: created.defaultLanguage === 'en' ? 'Main branch' : 'الفرع الرئيسي',
+            slug: MAIN_BRANCH_SLUG,
+            isMain: true,
+            phone: created.phone,
+            whatsappNumber: created.whatsappNumber,
+            city: created.city,
+            address: created.address,
+            sortOrder: 0,
+          },
+        });
         await this.subscriptions.startTrial(tx, created.id, now);
         return created;
       });
@@ -111,18 +136,16 @@ export class RestaurantsService {
   }
 
   async updateMine(ownerId: string, input: z.output<typeof updateRestaurantSchema>): Promise<OwnerRestaurant> {
-    const restaurant = await this.prisma.restaurant.findUnique({
-      where: { ownerId },
-      select: { id: true, status: true, acceptsDineIn: true, acceptsPickup: true },
-    });
+    const restaurant = await this.prisma.restaurant.findUnique({ where: { ownerId }, select: { id: true, status: true } });
     if (!restaurant) throw notFound();
+    const main = await this.scopes.mainBranch(restaurant.id);
     if (restaurant.status === 'SUSPENDED') {
       throw new ForbiddenException({
         code: RESTAURANT_ERROR_CODES.RESTAURANT_SUSPENDED,
         message: 'This restaurant is suspended. Please contact Bilhanah support.',
       });
     }
-    if ((input.acceptsDineIn ?? restaurant.acceptsDineIn) === false && (input.acceptsPickup ?? restaurant.acceptsPickup) === false) {
+    if ((input.acceptsDineIn ?? main.acceptsDineIn) === false && (input.acceptsPickup ?? main.acceptsPickup) === false) {
       throw new BadRequestException({
         code: COMMON_ERROR_CODES.VALIDATION_FAILED,
         message: 'Keep dine-in or pickup on.',
@@ -137,18 +160,24 @@ export class RestaurantsService {
     }
     if (input.logoId) await this.media.assertUsable(restaurant.id, input.logoId, 'LOGO');
     if (input.coverId) await this.media.assertUsable(restaurant.id, input.coverId, 'COVER');
-    const { openingHours, ...fields } = input;
-    const updated = await this.prisma.restaurant.update({
-      where: { id: restaurant.id },
-      data: {
-        ...fields,
-        ...(openingHours !== undefined && { openingHours: openingHours ?? Prisma.DbNull }),
-      },
-      include: withBranding,
-    });
+    const { openingHours, orderingEnabled, acceptsDineIn, acceptsPickup, ordersPaused, ...fields } = input;
+    const branchCount = await this.prisma.branch.count({ where: { restaurantId: restaurant.id } });
+    const mirrored = branchCount === 1 ? Object.fromEntries(MIRRORED_FIELDS.flatMap((key) => (fields[key] !== undefined ? [[key, fields[key]]] : []))) : {};
+    const branchData: Prisma.BranchUpdateInput = {
+      ...mirrored,
+      ...(openingHours !== undefined && { openingHours: openingHours ?? Prisma.DbNull }),
+      ...(orderingEnabled !== undefined && { orderingEnabled }),
+      ...(acceptsDineIn !== undefined && { acceptsDineIn }),
+      ...(acceptsPickup !== undefined && { acceptsPickup }),
+      ...(ordersPaused !== undefined && { ordersPaused }),
+    };
+    const [updated] = await this.prisma.$transaction([
+      this.prisma.restaurant.update({ where: { id: restaurant.id }, data: fields, include: withBranding }),
+      ...(Object.keys(branchData).length ? [this.prisma.branch.update({ where: { id: main.id }, data: branchData })] : []),
+    ]);
     const view = await this.toOwnerRestaurant(updated);
-    const orderingChanged = ['orderingEnabled', 'acceptsDineIn', 'acceptsPickup', 'ordersPaused'].some((key) => key in input);
-    if (orderingChanged) this.realtime.emitRestaurantUpdated(restaurant.id, view.ordering);
+    const orderingChanged = MAIN_BRANCH_FIELDS.slice(1).some((key) => key in input);
+    if (orderingChanged) this.realtime.emitRestaurantUpdated(restaurant.id, main.id, view.ordering);
     return view;
   }
 
@@ -156,26 +185,34 @@ export class RestaurantsService {
    * Resolves a restaurant for its public address. Expired and suspended
    * restaurants return the same neutral "temporarily unavailable" view.
    */
-  async findPublic(rawSubdomain: string): Promise<PublicRestaurant> {
-    return (await this.resolvePublic(rawSubdomain)).view;
+  async findPublic(rawSubdomain: string, branchSlug?: string): Promise<PublicRestaurant> {
+    return (await this.resolvePublic(rawSubdomain, branchSlug)).view;
   }
 
-  /** The restaurant and its menu in one response, for a diner's phone. */
-  async findPublicMenu(rawSubdomain: string): Promise<PublicMenuResponse> {
-    const { row, view } = await this.resolvePublic(rawSubdomain);
+  /** The restaurant and the chosen branch's menu (main branch by default) in one response, for a diner's phone. */
+  async findPublicMenu(rawSubdomain: string, branchSlug?: string): Promise<PublicMenuResponse> {
+    const { row, branch, view } = await this.resolvePublic(rawSubdomain, branchSlug);
     if (view.availability !== 'AVAILABLE') return { restaurant: view, categories: [] };
-    return { restaurant: view, categories: await this.menus.publicCategories(row.id, row.menuVersion) };
+    return { restaurant: view, categories: await this.menus.publicCategories(row.id, row.menuVersion, branch.id) };
   }
 
-  private async resolvePublic(rawSubdomain: string): Promise<{ row: RestaurantRow; view: PublicRestaurant }> {
+  private async resolvePublic(rawSubdomain: string, branchSlug?: string): Promise<{ row: RestaurantRow; branch: Branch; view: PublicRestaurant }> {
     const subdomain = normalizeSubdomain(rawSubdomain);
     if (subdomainProblem(subdomain)) throw notFound();
     const restaurant = await this.prisma.restaurant.findUnique({ where: { subdomain }, include: withBranding });
     if (!restaurant) throw notFound();
-    return { row: restaurant, view: await this.toPublicRestaurant(restaurant) };
+    const branches = await this.prisma.branch.findMany({
+      where: { restaurantId: restaurant.id, isActive: true },
+      orderBy: [{ isMain: 'desc' }, { sortOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+    const slug = branchSlug?.trim().toLowerCase();
+    // Archived and unknown branches look the same to diners.
+    const branch = slug ? branches.find((candidate) => candidate.slug === slug) : branches.find((candidate) => candidate.isMain);
+    if (!branch) throw branchNotFound();
+    return { row: restaurant, branch, view: await this.toPublicRestaurant(restaurant, branch, branches) };
   }
 
-  private async toPublicRestaurant(restaurant: RestaurantRow): Promise<PublicRestaurant> {
+  private async toPublicRestaurant(restaurant: RestaurantRow, branch: Branch, branches: Branch[]): Promise<PublicRestaurant> {
     const access = await this.subscriptions.accessFor(restaurant);
     if (!hasAccess(access)) {
       return {
@@ -190,37 +227,57 @@ export class RestaurantsService {
       subdomain: restaurant.subdomain,
       name: restaurant.name,
       defaultLanguage: restaurant.defaultLanguage,
-      phone: restaurant.phone,
-      city: restaurant.city,
-      address: restaurant.address,
-      whatsappNumber: restaurant.whatsappNumber,
+      phone: branch.phone,
+      city: branch.city,
+      address: branch.address,
+      whatsappNumber: branch.whatsappNumber,
       websiteUrl: restaurant.websiteUrl,
       facebookUrl: restaurant.facebookUrl,
       instagramUrl: restaurant.instagramUrl,
       timezone: restaurant.timezone,
       ordering: {
-        accepting: access.features.ordering && restaurant.orderingEnabled && !restaurant.ordersPaused,
-        dineIn: restaurant.acceptsDineIn,
-        pickup: restaurant.acceptsPickup,
+        accepting: access.features.ordering && branch.orderingEnabled && !branch.ordersPaused,
+        dineIn: branch.acceptsDineIn,
+        pickup: branch.acceptsPickup,
       },
-      ...this.branding(restaurant),
+      ...this.branding(restaurant, branch),
+      branch: this.toPublicBranch(branch, access.features.ordering),
+      branches: branches.map((candidate) => this.toPublicBranch(candidate, access.features.ordering)),
     };
   }
 
-  private branding(restaurant: RestaurantRow): RestaurantBranding {
+  private toPublicBranch(branch: Branch, orderingIncluded: boolean): PublicBranch {
+    return {
+      slug: branch.slug,
+      name: branch.name,
+      isMain: branch.isMain,
+      phone: branch.phone,
+      whatsappNumber: branch.whatsappNumber,
+      city: branch.city,
+      address: branch.address,
+      mapUrl: branch.mapUrl,
+      openingHours: hoursOf(branch),
+      acceptingOrders: orderingIncluded && branch.orderingEnabled && !branch.ordersPaused,
+    };
+  }
+
+  private branding(restaurant: RestaurantRow, branch: Branch): RestaurantBranding {
     return {
       logo: restaurant.logo ? this.media.toImageSet(restaurant.logo) : null,
       cover: restaurant.cover ? this.media.toImageSet(restaurant.cover) : null,
       brandColor: restaurant.brandColor,
-      // Validated by openingHoursSchema on the way in.
-      openingHours: restaurant.openingHours as OpeningHours | null,
+      openingHours: hoursOf(branch),
       // A theme removed in a later release falls back to the default.
       menuTheme: isMenuTheme(restaurant.menuTheme) ? restaurant.menuTheme : DEFAULT_MENU_THEME,
     };
   }
 
   private async toOwnerRestaurant(restaurant: RestaurantRow, now = new Date()): Promise<OwnerRestaurant> {
-    const access = await this.subscriptions.accessFor(restaurant, now);
+    const [access, main, branchCount] = await Promise.all([
+      this.subscriptions.accessFor(restaurant, now),
+      this.scopes.mainBranch(restaurant.id),
+      this.prisma.branch.count({ where: { restaurantId: restaurant.id, isActive: true } }),
+    ]);
     return {
       id: restaurant.id,
       name: restaurant.name,
@@ -238,14 +295,10 @@ export class RestaurantsService {
       instagramUrl: restaurant.instagramUrl,
       createdAt: restaurant.createdAt.toISOString(),
       access,
-      ordering: {
-        included: access.features.ordering,
-        enabled: restaurant.orderingEnabled,
-        acceptsDineIn: restaurant.acceptsDineIn,
-        acceptsPickup: restaurant.acceptsPickup,
-        paused: restaurant.ordersPaused,
-      },
-      ...this.branding(restaurant),
+      ordering: orderingSettings(main, access.features.ordering),
+      mainBranchId: main.id,
+      branchCount,
+      ...this.branding(restaurant, main),
     };
   }
 }

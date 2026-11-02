@@ -152,5 +152,34 @@ if (!kitchens.some((account) => account.email === KITCHEN_EMAIL)) {
   await api('POST', '/kitchen-accounts', { fullName: 'المطبخ', email: KITCHEN_EMAIL, password: KITCHEN_PASSWORD });
 }
 
+// A second branch, so multi-branch screens have something to show: its own
+// tables (copied from the main branch), ordering on, and one dish priced differently.
+const branchList = (await api('GET', '/branches')).data;
+const main = branchList.branches.find((branch) => branch.isMain);
+if (main && main.name === 'الفرع الرئيسي') await api('PATCH', `/branches/${main.id}`, { name: 'وسط البلد' });
+let nasr = branchList.branches.find((branch) => branch.slug === 'nasr-city');
+if (!nasr && branchList.used < branchList.limit) {
+  console.log('Creating the demo branch in Nasr City…');
+  nasr = (
+    await api('POST', '/branches', {
+      name: 'مدينة نصر',
+      slug: 'nasr-city',
+      phone: '0222220000',
+      city: 'القاهرة',
+      address: '5 شارع عباس العقاد',
+      mapUrl: 'https://maps.google.com/?q=Abbas+El+Akkad+Nasr+City',
+      openingHours: Object.fromEntries(['sat', 'sun', 'mon', 'tue', 'wed', 'thu', 'fri'].map((day) => [day, [{ opens: '12:00', closes: '02:00' }]])),
+      ...(main && { copyTablesFrom: main.id }),
+    })
+  ).data;
+  await api('PATCH', `/branches/${nasr.id}`, { orderingEnabled: true });
+  const firstDish = (await api('GET', `/branches/${nasr.id}/menu`)).data.categories[0]?.items[0];
+  if (firstDish) {
+    await api('PUT', `/branches/${nasr.id}/menu/items/${firstDish.id}`, {
+      prices: [{ variantId: firstDish.variants[0].id, pricePiastres: firstDish.variants[0].pricePiastres + 500 }],
+    });
+  }
+}
+
 const restaurant = (await api('GET', '/restaurants/mine')).data;
-console.log(`\nDemo menu: ${restaurant.publicUrl}\nOwner login: ${EMAIL} / ${PASSWORD}\nKitchen login: ${KITCHEN_EMAIL} / ${KITCHEN_PASSWORD}`);
+console.log(`\nDemo menu: ${restaurant.publicUrl}${nasr ? `\nNasr City branch: ${restaurant.publicUrl}/?b=nasr-city` : ''}\nOwner login: ${EMAIL} / ${PASSWORD}\nKitchen login: ${KITCHEN_EMAIL} / ${KITCHEN_PASSWORD}`);

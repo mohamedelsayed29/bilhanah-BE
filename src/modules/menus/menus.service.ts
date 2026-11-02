@@ -18,6 +18,7 @@ import type { z } from 'zod';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { REDIS } from '../../infrastructure/redis/redis.module.js';
 import { MediaService } from '../media/media.service.js';
+import { type BranchOverrides, effectiveItem, NO_OVERRIDES, toOverrides } from '../branches/branch-menu.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -58,20 +59,32 @@ export class MenusService {
 
   async getMenu(ownerId: string): Promise<OwnerMenu> {
     const restaurantId = await this.restaurantIdFor(ownerId, { forWrite: false });
+    return { categories: await this.ownerCategories(restaurantId) };
+  }
+
+  /** The whole shared menu as its owner sees it; also the base of every branch menu. */
+  async ownerCategories(restaurantId: string): Promise<OwnerMenu['categories']> {
     const categories = await this.prisma.category.findMany({
       where: { restaurantId },
       orderBy: { sortOrder: 'asc' },
       include: { items: { orderBy: { sortOrder: 'asc' }, include: itemInclude } },
     });
-    return {
-      categories: categories.map((category) => ({
-        id: category.id,
-        nameAr: category.nameAr,
-        nameEn: category.nameEn,
-        isVisible: category.isVisible,
-        items: category.items.map((item) => this.toOwnerItem(item)),
-      })),
-    };
+    return categories.map((category) => ({
+      id: category.id,
+      nameAr: category.nameAr,
+      nameEn: category.nameEn,
+      isVisible: category.isVisible,
+      items: category.items.map((item) => this.toOwnerItem(item)),
+    }));
+  }
+
+  /** A branch's overrides of this restaurant's menu. */
+  async branchOverrides(branchId: string): Promise<BranchOverrides> {
+    const [items, prices] = await Promise.all([
+      this.prisma.branchMenuItem.findMany({ where: { branchId }, select: { itemId: true, isAvailable: true, isHidden: true } }),
+      this.prisma.branchVariantPrice.findMany({ where: { branchId }, select: { variantId: true, pricePiastres: true } }),
+    ]);
+    return toOverrides(items, prices);
   }
 
   // --- Categories --------------------------------------------------------
@@ -156,8 +169,15 @@ export class MenusService {
         data.sortOrder = await nextItemPosition(tx, input.categoryId);
       }
       if (variants) {
-        await tx.menuItemVariant.deleteMany({ where: { itemId } });
-        data.variants = { create: variants.map((variant, index) => ({ ...variant, sortOrder: index })) };
+        // Sizes are matched by position and updated in place, so branch prices
+        // set for a size survive edits to its name or shared price.
+        const existing = await tx.menuItemVariant.findMany({ where: { itemId }, orderBy: { sortOrder: 'asc' }, select: { id: true } });
+        await tx.menuItemVariant.deleteMany({ where: { itemId, id: { in: existing.slice(variants.length).map((row) => row.id) } } });
+        for (const [index, variant] of variants.entries()) {
+          const current = existing[index];
+          if (current) await tx.menuItemVariant.update({ where: { id: current.id }, data: { ...variant, sortOrder: index } });
+          else await tx.menuItemVariant.create({ data: { ...variant, itemId, sortOrder: index } });
+        }
       }
       const item = await tx.menuItem.update({ where: { id: itemId }, data, include: itemInclude });
       return this.toOwnerItem(item);
@@ -188,8 +208,9 @@ export class MenusService {
    * Visible categories with their visible items; empty categories are left
    * out. Cached in Redis per menu version, so any edit is visible at once.
    */
-  async publicCategories(restaurantId: string, menuVersion: number): Promise<PublicMenuCategory[]> {
-    const key = `menu:public:${restaurantId}:${menuVersion}`;
+  async publicCategories(restaurantId: string, menuVersion: number, branchId?: string): Promise<PublicMenuCategory[]> {
+    // Branch overrides bump menuVersion too, so one key per branch and version is enough.
+    const key = `menu:public:${restaurantId}:${menuVersion}${branchId ? `:${branchId}` : ''}`;
     try {
       const cached = await this.redis.get(key);
       if (cached) return JSON.parse(cached) as PublicMenuCategory[];
@@ -197,19 +218,26 @@ export class MenusService {
       this.logger.warn({ err: error }, 'Menu cache unavailable');
     }
 
-    const categories = await this.prisma.category.findMany({
-      where: { restaurantId, isVisible: true },
-      orderBy: { sortOrder: 'asc' },
-      include: { items: { where: { isVisible: true }, orderBy: { sortOrder: 'asc' }, include: itemInclude } },
-    });
+    const [categories, overrides] = await Promise.all([
+      this.prisma.category.findMany({
+        where: { restaurantId, isVisible: true },
+        orderBy: { sortOrder: 'asc' },
+        include: { items: { where: { isVisible: true }, orderBy: { sortOrder: 'asc' }, include: itemInclude } },
+      }),
+      branchId ? this.branchOverrides(branchId) : Promise.resolve(NO_OVERRIDES),
+    ]);
     const result: PublicMenuCategory[] = categories
-      .filter((category) => category.items.length > 0)
       .map((category) => ({
         id: category.id,
         nameAr: category.nameAr,
         nameEn: category.nameEn,
-        items: category.items.map((item) => this.toPublicItem(item)),
-      }));
+        items: category.items.flatMap((item) => {
+          const shared = this.toPublicItem(item);
+          const effective = effectiveItem({ ...shared, isVisible: item.isVisible }, overrides);
+          return effective.visible ? [{ ...shared, isAvailable: effective.available, variants: effective.variants }] : [];
+        }),
+      }))
+      .filter((category) => category.items.length > 0);
 
     this.redis.set(key, JSON.stringify(result), 'EX', PUBLIC_MENU_TTL_SECONDS).catch((error: unknown) => {
       this.logger.warn({ err: error }, 'Could not cache menu');

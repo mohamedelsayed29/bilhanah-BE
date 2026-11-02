@@ -8,7 +8,6 @@ import {
   ORDER_ERROR_CODES,
   ORDER_LIMITS,
   type PublicTable,
-  RESTAURANT_ERROR_CODES,
   type RestaurantTable,
   type updateTableSchema,
 } from '@bilhanah/contracts';
@@ -17,6 +16,7 @@ import type { z } from 'zod';
 import type { Env } from '../../config/env.schema.js';
 import { isUniqueViolation } from '../../infrastructure/database/prisma-errors.js';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
+import { BranchScopeService } from '../branches/branch-scope.service.js';
 
 const tableNotFound = () => new NotFoundException({ code: ORDER_ERROR_CODES.TABLE_NOT_FOUND, message: 'Table not found.' });
 const labelTaken = () =>
@@ -25,31 +25,38 @@ const labelTaken = () =>
 /** 64 random bits, URL-safe; printed in the table's QR code. */
 const newPublicCode = () => randomBytes(8).toString('base64url');
 
-/** Dining tables and their QR codes. Owner operations are scoped to the caller's restaurant. */
+/**
+ * Dining tables and their QR codes. Each table belongs to one branch; owners
+ * manage every branch's tables, managers their own branch's.
+ */
 @Injectable()
 export class TablesService {
   private readonly urlTemplate: string;
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly scopes: BranchScopeService,
     config: ConfigService<Env, true>,
   ) {
     this.urlTemplate = config.get('RESTAURANT_URL_TEMPLATE', { infer: true });
   }
 
-  async list(ownerId: string): Promise<RestaurantTable[]> {
-    const restaurant = await this.restaurantFor(ownerId);
-    const tables = await this.prisma.table.findMany({ where: { restaurantId: restaurant.id }, orderBy: { sortOrder: 'asc' } });
-    return tables.map((table) => this.toView(table, restaurant.subdomain));
+  /** One branch's tables, or every table the caller may see when no branch is given. */
+  async list(userId: string, branchId?: string): Promise<RestaurantTable[]> {
+    const scope = await this.scopes.resolve(userId);
+    const where = await this.scopes.branchWhere(scope, branchId);
+    const tables = await this.prisma.table.findMany({ where, orderBy: [{ branchId: 'asc' }, { sortOrder: 'asc' }] });
+    return tables.map((table) => this.toView(table, scope.restaurant.subdomain));
   }
 
-  async create(ownerId: string, input: z.output<typeof createTableSchema>): Promise<RestaurantTable> {
-    const restaurant = await this.restaurantFor(ownerId);
-    const { _count, _max } = await this.prisma.table.aggregate({ where: { restaurantId: restaurant.id }, _count: true, _max: { sortOrder: true } });
+  async create(userId: string, input: z.output<typeof createTableSchema>): Promise<RestaurantTable> {
+    const { restaurant, branch } = await this.target(userId, input.branchId);
+    const { branchId: _branch, ...fields } = input;
+    const { _count, _max } = await this.prisma.table.aggregate({ where: { branchId: branch.id }, _count: true, _max: { sortOrder: true } });
     if (_count >= ORDER_LIMITS.tables) throw this.limitReached();
     try {
       const table = await this.prisma.table.create({
-        data: { restaurantId: restaurant.id, ...input, publicCode: newPublicCode(), sortOrder: (_max.sortOrder ?? -1) + 1 },
+        data: { restaurantId: restaurant.id, branchId: branch.id, ...fields, publicCode: newPublicCode(), sortOrder: (_max.sortOrder ?? -1) + 1 },
       });
       return this.toView(table, restaurant.subdomain);
     } catch (error) {
@@ -59,9 +66,9 @@ export class TablesService {
   }
 
   /** Creates {prefix}{from} ... {prefix}{to}, all of one shape and size; labels that already exist are skipped. */
-  async createRange(ownerId: string, input: z.output<typeof bulkCreateTablesSchema>): Promise<RestaurantTable[]> {
-    const restaurant = await this.restaurantFor(ownerId);
-    const existing = await this.prisma.table.findMany({ where: { restaurantId: restaurant.id }, select: { label: true, sortOrder: true } });
+  async createRange(userId: string, input: z.output<typeof bulkCreateTablesSchema>): Promise<RestaurantTable[]> {
+    const { restaurant, branch } = await this.target(userId, input.branchId);
+    const existing = await this.prisma.table.findMany({ where: { branchId: branch.id }, select: { label: true, sortOrder: true } });
     const taken = new Set(existing.map((table) => table.label));
     // "Table" + 5 → "Table 5" and "طاولة" + 5 → "طاولة 5"; "T-" + 5 → "T-5".
     const separator = /[\p{L}\p{N}]$/u.test(input.prefix) ? ' ' : '';
@@ -73,6 +80,7 @@ export class TablesService {
     await this.prisma.table.createMany({
       data: labels.map((label, index) => ({
         restaurantId: restaurant.id,
+        branchId: branch.id,
         label,
         shape: input.shape,
         seats: input.seats,
@@ -81,13 +89,13 @@ export class TablesService {
       })),
       skipDuplicates: true,
     });
-    return this.list(ownerId);
+    return this.list(userId, branch.id);
   }
 
-  async update(ownerId: string, tableId: string, input: z.output<typeof updateTableSchema>): Promise<RestaurantTable> {
-    const restaurant = await this.restaurantFor(ownerId);
+  async update(userId: string, tableId: string, input: z.output<typeof updateTableSchema>): Promise<RestaurantTable> {
+    const { restaurant, where } = await this.own(userId);
     try {
-      const updated = await this.prisma.table.updateMany({ where: { id: tableId, restaurantId: restaurant.id }, data: input });
+      const updated = await this.prisma.table.updateMany({ where: { id: tableId, ...where }, data: input });
       if (updated.count === 0) throw tableNotFound();
     } catch (error) {
       if (isUniqueViolation(error)) throw labelTaken();
@@ -97,33 +105,34 @@ export class TablesService {
   }
 
   /** Past orders keep the table's name. */
-  async remove(ownerId: string, tableId: string): Promise<void> {
-    const restaurant = await this.restaurantFor(ownerId);
-    const deleted = await this.prisma.table.deleteMany({ where: { id: tableId, restaurantId: restaurant.id } });
+  async remove(userId: string, tableId: string): Promise<void> {
+    const { where } = await this.own(userId);
+    const deleted = await this.prisma.table.deleteMany({ where: { id: tableId, ...where } });
     if (deleted.count === 0) throw tableNotFound();
   }
 
   /** A new QR code for the table; codes already printed stop working. */
-  async regenerateCode(ownerId: string, tableId: string): Promise<RestaurantTable> {
-    const restaurant = await this.restaurantFor(ownerId);
-    const updated = await this.prisma.table.updateMany({ where: { id: tableId, restaurantId: restaurant.id }, data: { publicCode: newPublicCode() } });
+  async regenerateCode(userId: string, tableId: string): Promise<RestaurantTable> {
+    const { restaurant, where } = await this.own(userId);
+    const updated = await this.prisma.table.updateMany({ where: { id: tableId, ...where }, data: { publicCode: newPublicCode() } });
     if (updated.count === 0) throw tableNotFound();
     return this.toView(await this.prisma.table.findUniqueOrThrow({ where: { id: tableId } }), restaurant.subdomain);
   }
 
-  /** The table a diner scanned, so the menu can show "Table 5". */
+  /** The table a diner scanned, so the menu can show "Table 5" and open its branch. */
   async findPublic(rawSubdomain: string, code: string): Promise<PublicTable> {
     const table = await this.prisma.table.findFirst({
-      where: { publicCode: code, isActive: true, restaurant: { subdomain: normalizeSubdomain(rawSubdomain) } },
-      select: { label: true },
+      where: { publicCode: code, isActive: true, branch: { isActive: true }, restaurant: { subdomain: normalizeSubdomain(rawSubdomain) } },
+      select: { label: true, branch: { select: { slug: true } } },
     });
     if (!table) throw tableNotFound();
-    return table;
+    return { label: table.label, branch: table.branch.slug };
   }
 
   private toView(table: Table, subdomain: string): RestaurantTable {
     return {
       id: table.id,
+      branchId: table.branchId,
       label: table.label,
       shape: table.shape,
       seats: table.seats,
@@ -137,16 +146,20 @@ export class TablesService {
   private limitReached() {
     return new ConflictException({
       code: ORDER_ERROR_CODES.TABLE_LIMIT_REACHED,
-      message: `A restaurant can have at most ${ORDER_LIMITS.tables} tables.`,
+      message: `A branch can have at most ${ORDER_LIMITS.tables} tables.`,
       details: { limit: ORDER_LIMITS.tables },
     });
   }
 
-  private async restaurantFor(ownerId: string) {
-    const restaurant = await this.prisma.restaurant.findUnique({ where: { ownerId }, select: { id: true, subdomain: true } });
-    if (!restaurant) {
-      throw new NotFoundException({ code: RESTAURANT_ERROR_CODES.RESTAURANT_NOT_FOUND, message: 'Restaurant not found.' });
-    }
-    return restaurant;
+  /** The branch new tables go to: the requested one (checked), the manager's, or the main branch. */
+  private async target(userId: string, branchId?: string) {
+    const scope = await this.scopes.resolve(userId);
+    return { restaurant: scope.restaurant, branch: await this.scopes.branch(scope, branchId) };
+  }
+
+  /** Tables the caller may change. */
+  private async own(userId: string) {
+    const scope = await this.scopes.resolve(userId);
+    return { restaurant: scope.restaurant, where: await this.scopes.branchWhere(scope) };
   }
 }

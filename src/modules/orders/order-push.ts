@@ -7,6 +7,8 @@ export type OrderPushInput = {
   status: OrderStatus;
   rejectionReason: string | null;
   restaurantName: string;
+  /** Set when the restaurant has several branches, so diners know which one is calling them. */
+  branchName?: string | null;
   language: Language;
   /** The order's tracking page. */
   url: string;
@@ -35,7 +37,8 @@ export function orderPushPayload(input: OrderPushInput): OrderPushPayload {
     default:
       body = ar ? `فيه تحديث على طلبك رقم ${number}.` : `Order #${number} has an update.`;
   }
-  return { title: input.restaurantName, body, url: input.url, tag: `order-${input.orderId}`, status: input.status, icon: input.icon };
+  const title = input.branchName ? `${input.restaurantName} · ${input.branchName}` : input.restaurantName;
+  return { title, body, url: input.url, tag: `order-${input.orderId}`, status: input.status, icon: input.icon };
 }
 
 /** Push topic: a newer update replaces an older one the push service still holds. At most 32 URL-safe characters. */

@@ -46,7 +46,14 @@ export class PushProcessor implements OnApplicationBootstrap, OnApplicationShutd
       where: { id: subscriptionId },
       include: {
         order: {
-          select: { id: true, number: true, type: true, rejectionReason: true, restaurant: { select: { name: true, subdomain: true, logo: true } } },
+          select: {
+            id: true,
+            number: true,
+            type: true,
+            rejectionReason: true,
+            restaurant: { select: { name: true, subdomain: true, logo: true, _count: { select: { branches: { where: { isActive: true } } } } } },
+            branch: { select: { name: true } },
+          },
         },
       },
     });
@@ -62,6 +69,7 @@ export class PushProcessor implements OnApplicationBootstrap, OnApplicationShutd
       status,
       rejectionReason: order.rejectionReason,
       restaurantName: order.restaurant.name,
+      branchName: order.restaurant._count.branches > 1 ? order.branch.name : null,
       language: subscription.language,
       url: `${this.urlTemplate.replace('{subdomain}', order.restaurant.subdomain)}/order/${this.trackingTokens.issue(order.id)}`,
       icon: logo?.sources[0]?.url ?? null,
