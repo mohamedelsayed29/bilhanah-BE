@@ -29,6 +29,10 @@ import { ShopModule } from './modules/shop/shop.module.js';
 import { PlansModule } from './modules/plans/plans.module.js';
 import { RestaurantsModule } from './modules/restaurants/restaurants.module.js';
 import { TablesModule } from './modules/tables/tables.module.js';
+import { ServiceRequestsModule } from './modules/service-requests/service-requests.module.js';
+import { RecommendationsModule } from './modules/recommendations/recommendations.module.js';
+import { KitchenDisplayModule } from './modules/kitchen-display/kitchen-display.module.js';
+import { AttendanceModule } from './modules/attendance/attendance.module.js';
 
 @Module({
   imports: [
@@ -54,6 +58,10 @@ import { TablesModule } from './modules/tables/tables.module.js';
     BillingModule,
     AdminModule,
     TablesModule,
+    ServiceRequestsModule,
+    RecommendationsModule,
+    KitchenDisplayModule,
+    AttendanceModule,
     OrdersModule,
     KitchenModule,
     PwaModule,

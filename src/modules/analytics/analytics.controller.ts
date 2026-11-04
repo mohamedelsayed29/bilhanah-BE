@@ -5,7 +5,7 @@ import type { z } from 'zod';
 import { type AuthContext, CurrentAuth } from '../../common/decorators/current-auth.decorator.js';
 import { AccessTokenGuard } from '../../common/guards/access-token.guard.js';
 import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
-import { RequireRole, RolesGuard } from '../../common/guards/roles.guard.js';
+import { RequireAnyPermission, RequirePermission, RequireRole, RolesGuard } from '../../common/guards/roles.guard.js';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
 import { StatsService } from './stats.service.js';
 import { VisitsService } from './visits.service.js';
@@ -28,9 +28,10 @@ export class VisitsController {
   }
 }
 
+/** The dashboard's figures: analytics.view (or dashboard.view, without revenue unless analytics.financial). */
 @Controller('restaurants/mine/stats')
 @UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
-@RequireRole('OWNER', 'MANAGER')
+@RequireAnyPermission('analytics.view', 'dashboard.view')
 export class RestaurantStatsController {
   constructor(private readonly stats: StatsService) {}
 
@@ -41,8 +42,9 @@ export class RestaurantStatsController {
     return this.stats.restaurant(auth.userId, query.days, query.branchId);
   }
 
+  /** Branches side by side, revenue included. */
   @Get('branches')
-  @RequireRole('OWNER')
+  @RequirePermission('analytics.view', 'analytics.financial')
   @Header('Cache-Control', 'no-store')
   @RateLimit({ name: 'stats:ip', limit: 120, windowSeconds: 60, by: 'ip' })
   branches(@CurrentAuth() auth: AuthContext, @Query(new ZodValidationPipe(statsQuerySchema)) query: z.output<typeof statsQuerySchema>): Promise<BranchComparison> {

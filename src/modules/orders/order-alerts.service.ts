@@ -18,6 +18,8 @@ import { TrackingTokens } from './tracking-token.js';
 
 /** Order updates a diner hears about by push: the order is ready, or it will not come. */
 export const PUSHED_STATUSES: ReadonlySet<OrderStatus> = new Set(['READY', 'REJECTED', 'CANCELLED']);
+/** And, for diners who asked for every update, the steps on the way. */
+export const PROGRESS_STATUSES: ReadonlySet<OrderStatus> = new Set(['ACCEPTED', 'PREPARING']);
 /** Diners can ask for alerts until the order is ready. */
 const SUBSCRIBABLE_STATUSES: ReadonlySet<OrderStatus> = new Set(['PLACED', 'ACCEPTED', 'PREPARING']);
 
@@ -58,7 +60,7 @@ export class OrderAlertsService {
     if (!SUBSCRIBABLE_STATUSES.has(order.status)) throw pushUnavailable('ORDER_FINISHED', 'This order is already ready or closed.');
 
     const where = { orderId_endpoint: { orderId: order.id, endpoint: input.endpoint } };
-    const data = { p256dh: input.keys.p256dh, auth: input.keys.auth, language: input.language };
+    const data = { p256dh: input.keys.p256dh, auth: input.keys.auth, language: input.language, updates: input.updates };
     const existing = await this.prisma.pushSubscription.findUnique({ where, select: { id: true } });
     if (existing) {
       await this.prisma.pushSubscription.update({ where, data });
@@ -85,9 +87,10 @@ export class OrderAlertsService {
 
   /** Queues a push to every browser subscribed to the order. Never fails the status change itself. */
   async queueStatus(orderId: string, status: OrderStatus): Promise<void> {
-    if (!PUSHED_STATUSES.has(status)) return;
+    const progress = PROGRESS_STATUSES.has(status);
+    if (!PUSHED_STATUSES.has(status) && !progress) return;
     try {
-      const targets = await this.prisma.pushSubscription.findMany({ where: { orderId }, select: { id: true } });
+      const targets = await this.prisma.pushSubscription.findMany({ where: { orderId, ...(progress && { updates: 'ALL' as const }) }, select: { id: true } });
       if (!targets.length) return;
       await this.pushJobs.addBulk(
         targets.map(({ id }) => ({

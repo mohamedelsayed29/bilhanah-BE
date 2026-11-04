@@ -1,7 +1,13 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap, type OnApplicationShutdown } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
 import {
+  STAFF_ROLES,
   type OwnerOrder,
+  type OwnerServiceRequest,
+  type PublicServiceRequest,
+  SERVICE_REQUEST_EVENTS,
+  type ServiceRequestEvent,
+  type TableServiceEvent,
   type OwnerOrderEvent,
   type OrderingSettings,
   type PublicOrder,
@@ -17,10 +23,12 @@ import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { REDIS } from '../../infrastructure/redis/redis.module.js';
 import { AccessTokenService } from '../auth/access-token.service.js';
 import { TrackingTokens } from '../orders/tracking-token.js';
+import { TABLE_SESSION_TOKENS } from '../service-requests/session-token.js';
 
 const restaurantRoom = (restaurantId: string) => `restaurant:${restaurantId}`;
 const branchRoom = (branchId: string) => `branch:${branchId}`;
 const orderRoom = (orderId: string) => `order:${orderId}`;
+const tableSessionRoom = (sessionId: string) => `table-session:${sessionId}`;
 
 /**
  * Live order updates over Socket.IO (WebSocket only, so no sticky sessions
@@ -31,6 +39,8 @@ const orderRoom = (orderId: string) => `order:${orderId}`;
  *   disconnected when the token expires, so the client reconnects with a
  *   fresh one and revoked sessions stop receiving events.
  * - /track: auth { token: trackingToken }. Joins that one order's room.
+ * - /table: auth { token: tableSessionToken }. Joins that table session's room, for the
+ *   status of the guests' service requests.
  */
 @Injectable()
 export class RealtimeService implements OnApplicationBootstrap, OnApplicationShutdown {
@@ -38,12 +48,14 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
   private io?: Server;
   private owners?: Namespace;
   private trackers?: Namespace;
+  private tables?: Namespace;
   private adapterClients: Redis[] = [];
 
   constructor(
     private readonly http: HttpAdapterHost,
     private readonly accessTokens: AccessTokenService,
     private readonly trackingTokens: TrackingTokens,
+    @Inject(TABLE_SESSION_TOKENS) private readonly sessionTokens: TrackingTokens,
     private readonly prisma: PrismaService,
     @Inject(REDIS) private readonly redis: Redis,
   ) {}
@@ -77,6 +89,21 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
       void socket.join(orderRoom(orderId));
       next();
     });
+
+    this.tables = this.io.of('/table');
+    this.tables.use((socket, next) => {
+      const sessionId = typeof socket.handshake.auth['token'] === 'string' ? this.sessionTokens.verify(socket.handshake.auth['token']) : null;
+      if (!sessionId) return next(new Error('TABLE_SESSION_INVALID'));
+      void socket.join(tableSessionRoom(sessionId));
+      next();
+    });
+  }
+
+  /** A new or changed service request: to the staff of its branch, and to the guests of its table session. */
+  emitServiceRequest(kind: 'created' | 'updated', restaurantId: string, sessionId: string, ownerView: OwnerServiceRequest, publicView: PublicServiceRequest): void {
+    const event = kind === 'created' ? SERVICE_REQUEST_EVENTS.CREATED : SERVICE_REQUEST_EVENTS.UPDATED;
+    this.owners?.to([restaurantRoom(restaurantId), branchRoom(ownerView.branchId)]).emit(event, { request: ownerView } satisfies ServiceRequestEvent);
+    this.tables?.to(tableSessionRoom(sessionId)).emit(event, { request: publicView } satisfies TableServiceEvent);
   }
 
   emitOrderCreated(restaurantId: string, order: OwnerOrder): void {
@@ -115,7 +142,8 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
         user: { select: { role: true, status: true, staffRestaurantId: true, staffBranchId: true, restaurant: { select: { id: true } } } },
       },
     });
-    const staff = session?.user.role === 'KITCHEN' || session?.user.role === 'MANAGER';
+    // Staff follow their restaurant (and only their branch when tied to one); owners their own restaurant.
+    const staff = session !== null && (STAFF_ROLES as readonly string[]).includes(session.user.role);
     const restaurantId = staff ? session.user.staffRestaurantId : session?.user.restaurant?.id;
     if (!session || session.userId !== claims.sub || session.revokedAt || session.expiresAt <= new Date() || session.user.status !== 'ACTIVE' || !restaurantId) {
       throw new Error('UNAUTHENTICATED');

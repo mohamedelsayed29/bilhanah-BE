@@ -5,13 +5,14 @@ import type { z } from 'zod';
 import { type AuthContext, CurrentAuth } from '../../common/decorators/current-auth.decorator.js';
 import { AccessTokenGuard } from '../../common/guards/access-token.guard.js';
 import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
-import { RequireRole, RolesGuard } from '../../common/guards/roles.guard.js';
+import { RequireAnyPermission, RolesGuard } from '../../common/guards/roles.guard.js';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
 import { MediaService } from './media.service.js';
 
 @Controller('media')
 @UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
-@RequireRole('OWNER')
+/** Images for the menu (menu.manage) and the restaurant's branding (settings.manage). */
+@RequireAnyPermission('menu.manage', 'settings.manage')
 export class MediaController {
   constructor(private readonly media: MediaService) {}
 

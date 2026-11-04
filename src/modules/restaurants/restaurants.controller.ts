@@ -10,10 +10,11 @@ import type { z } from 'zod';
 import { type AuthContext, CurrentAuth } from '../../common/decorators/current-auth.decorator.js';
 import { AccessTokenGuard } from '../../common/guards/access-token.guard.js';
 import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
-import { RequireRole, RolesGuard } from '../../common/guards/roles.guard.js';
+import { RequirePermission, RequireRole, RolesGuard } from '../../common/guards/roles.guard.js';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
 import { RestaurantsService } from './restaurants.service.js';
 
+/** Setting up a restaurant is for owner accounts; its profile and settings need settings.manage. */
 @Controller('restaurants')
 @UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
 @RequireRole('OWNER')
@@ -39,12 +40,14 @@ export class RestaurantsController {
   }
 
   @Get('mine')
+  @RequirePermission('settings.manage')
   @Header('Cache-Control', 'no-store')
   findMine(@CurrentAuth() auth: AuthContext): Promise<OwnerRestaurant> {
     return this.restaurants.findMine(auth.userId);
   }
 
   @Patch('mine')
+  @RequirePermission('settings.manage')
   updateMine(
     @CurrentAuth() auth: AuthContext,
     @Body(new ZodValidationPipe(updateRestaurantSchema)) body: z.output<typeof updateRestaurantSchema>,

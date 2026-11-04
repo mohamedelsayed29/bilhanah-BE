@@ -13,7 +13,7 @@ import type { z } from 'zod';
 import { type AuthContext, CurrentAuth } from '../../common/decorators/current-auth.decorator.js';
 import { AccessTokenGuard } from '../../common/guards/access-token.guard.js';
 import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
-import { RequireRole, RolesGuard } from '../../common/guards/roles.guard.js';
+import { RequirePermission, RolesGuard } from '../../common/guards/roles.guard.js';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
 import { MenusService } from './menus.service.js';
 
@@ -26,7 +26,7 @@ const idParam = new ZodValidationPipe(menuIdParamSchema);
  */
 @Controller('menu')
 @UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
-@RequireRole('OWNER')
+@RequirePermission('menu.manage')
 export class MenusController {
   constructor(private readonly menus: MenusService) {}
 

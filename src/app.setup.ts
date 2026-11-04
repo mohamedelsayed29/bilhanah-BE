@@ -36,7 +36,7 @@ export function configureApp(app: NestExpressApplication): void {
   app.use(cookieParser());
   // Runs before Nest's parser (registered at init), so body errors get standard codes.
   app.use(jsonBody());
-  const dashboardOrigins = config.get('CORS_ORIGINS', { infer: true });
+  const dashboardOrigins = [...new Set([...config.get('CORS_ORIGINS', { infer: true }), ...config.get('ADMIN_ORIGINS', { infer: true })])];
   app.enableCors((request: { url?: string }, callback) => {
     // Public routes serve every restaurant subdomain and the website, and never use cookies.
     if (request.url?.startsWith('/v1/public/')) {

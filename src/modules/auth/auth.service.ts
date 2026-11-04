@@ -20,6 +20,7 @@ import {
   type registerOwnerSchema,
   type SessionResponse,
   type VerifyEmailResponse,
+  effectivePermissions,
 } from '@bilhanah/contracts';
 import type { User, UserRole } from '@bilhanah/database';
 import { SecretBox } from '../../common/crypto/secret-box.js';
@@ -71,6 +72,7 @@ function toAuthUser(user: User): AuthUser {
     fullName: user.fullName,
     preferredLanguage: user.preferredLanguage,
     role: user.role,
+    permissions: effectivePermissions(user.role, user.permissionGrants),
     emailVerified: user.emailVerifiedAt !== null,
   };
 }
@@ -245,7 +247,8 @@ export class AuthService {
    * out revokes the session, since the token may have been stolen. Clients
    * must therefore never refresh concurrently with the same token.
    */
-  async refresh(cookie: unknown): Promise<IssuedSession> {
+  /** `app`: which app is refreshing; an administrator session only renews in the admin console, and only there. */
+  async refresh(cookie: unknown, app: 'restaurant' | 'admin' = 'restaurant'): Promise<IssuedSession> {
     const parsed = parseRefreshToken(cookie);
     if (!parsed) throw sessionInvalid();
 
@@ -259,7 +262,8 @@ export class AuthService {
       session.revokedAt ||
       session.expiresAt <= now ||
       this.nextExpiry(session.createdAt, now, session.user.role) <= now ||
-      session.user.status !== 'ACTIVE'
+      session.user.status !== 'ACTIVE' ||
+      (session.user.role === 'ADMIN') !== (app === 'admin')
     ) {
       throw sessionInvalid();
     }

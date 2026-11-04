@@ -64,6 +64,30 @@ describe('administrator sign-in', () => {
     await adminLogin({ email: 'owner@koshary.test', password: 'correct-horse-battery', code: currentCode(secret) }).expect(401);
   });
 
+  it('gives the admin console its own session cookie, separate from restaurant sessions', async () => {
+    const { secret } = await signInAdmin(t);
+    const login = await adminLogin({ email: 'admin@bilhanah.test', password: ADMIN_PASSWORD, code: currentCode(secret, 1) }).expect(200);
+    const cookies = ([] as string[]).concat(login.headers['set-cookie'] ?? []);
+    const admin = cookies.find((value) => value.startsWith('bh_admin_refresh='))!;
+    expect(admin).toContain('Path=/v1/auth/admin');
+    expect(cookies.some((value) => value.startsWith('bh_refresh='))).toBe(false);
+    const pair = admin.split(';')[0]!;
+
+    // The admin console refreshes it; a restaurant dashboard cannot use an administrator session.
+    const refreshed = await http().post('/v1/auth/admin/refresh').set('Origin', DASHBOARD_ORIGIN).set('Cookie', pair).expect(200);
+    expect(refreshed.body.user.role).toBe('ADMIN');
+    const next = ([] as string[]).concat(refreshed.headers['set-cookie'] ?? []).find((value) => value.startsWith('bh_admin_refresh='))!.split(';')[0]!;
+    await http().post('/v1/auth/refresh').set('Origin', DASHBOARD_ORIGIN).set('Cookie', next.replace('bh_admin_refresh', 'bh_refresh')).expect(401);
+
+    // And an owner's session never renews in the admin console.
+    await signUpOwner(t, 'owner@koshary.test');
+    const owner = await http().post('/v1/auth/login').set('Origin', DASHBOARD_ORIGIN).send({ email: 'owner@koshary.test', password: 'correct-horse-battery' }).expect(200);
+    const ownerPair = ([] as string[]).concat(owner.headers['set-cookie'] ?? []).find((value) => value.startsWith('bh_refresh='))!.split(';')[0]!;
+    await http().post('/v1/auth/admin/refresh').set('Origin', DASHBOARD_ORIGIN).set('Cookie', ownerPair.replace('bh_refresh', 'bh_admin_refresh')).expect(401);
+
+    await http().post('/v1/auth/admin/logout').set('Origin', DASHBOARD_ORIGIN).set('Cookie', next).expect(204);
+  });
+
   it('explains when an administrator has no authenticator', async () => {
     const passwords = t.app.get(PasswordService);
     await createAdmin(t.prisma, (value) => passwords.hash(value), { email: 'old@bilhanah.test', fullName: 'Old Admin', password: ADMIN_PASSWORD });
@@ -159,6 +183,18 @@ describe('administration API', () => {
     const audit = await http().get('/v1/admin/audit').set(auth(token)).expect(200);
     expect(audit.body.items.map((entry: { action: string }) => entry.action)).toEqual(['restaurant.unsuspend', 'restaurant.suspend']);
     expect(audit.body.items[1]).toMatchObject({ targetId: id, metadata: { reason: 'Chargeback dispute' }, actor: { email: 'admin@bilhanah.test' } });
+    // Entries name the restaurant they concern, and say they came from the console.
+    expect(audit.body.items[1]).toMatchObject({ scope: 'platform', restaurant: { id, name: 'Koshary Abou Tarek' } });
+
+    // A restaurant's own staff change is a restaurant entry; the scope filter splits the two.
+    await http().post('/v1/kitchen-accounts').set(auth(owner))
+      .send({ fullName: 'Sami', email: 'sami@koshary.test', password: 'staff-password', role: 'WAITER' }).expect(201);
+    const restaurants = (await http().get('/v1/admin/audit?scope=restaurant').set(auth(token)).expect(200)).body;
+    expect(restaurants.items.map((entry: { action: string }) => entry.action)).toEqual(['staff.created']);
+    expect(restaurants.items[0]).toMatchObject({ scope: 'restaurant', restaurant: { id, name: 'Koshary Abou Tarek' }, metadata: { targetName: 'Sami' } });
+    const platform = (await http().get('/v1/admin/audit?scope=platform').set(auth(token)).expect(200)).body;
+    expect(platform.items.map((entry: { action: string }) => entry.action)).toEqual(['restaurant.unsuspend', 'restaurant.suspend']);
+    expect((await http().get('/v1/admin/audit').set(auth(token)).expect(200)).body.total).toBe(3);
   });
 
   it('grants a paid period by hand, after any current coverage', async () => {

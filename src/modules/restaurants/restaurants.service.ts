@@ -29,6 +29,7 @@ import { MediaService } from '../media/media.service.js';
 import { MenusService } from '../menus/menus.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { hasAccess } from '../subscriptions/access.js';
+import { RecommendationsService } from '../recommendations/recommendations.service.js';
 import { BranchScopeService, branchNotFound } from '../branches/branch-scope.service.js';
 import { orderingSettings } from '../branches/branches.service.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
@@ -73,6 +74,7 @@ export class RestaurantsService {
     private readonly menus: MenusService,
     private readonly realtime: RealtimeService,
     private readonly scopes: BranchScopeService,
+    private readonly recommendations: RecommendationsService,
     config: ConfigService<Env, true>,
   ) {
     this.urlTemplate = config.get('RESTAURANT_URL_TEMPLATE', { infer: true });
@@ -192,8 +194,10 @@ export class RestaurantsService {
   /** The restaurant and the chosen branch's menu (main branch by default) in one response, for a diner's phone. */
   async findPublicMenu(rawSubdomain: string, branchSlug?: string): Promise<PublicMenuResponse> {
     const { row, branch, view } = await this.resolvePublic(rawSubdomain, branchSlug);
-    if (view.availability !== 'AVAILABLE') return { restaurant: view, categories: [] };
-    return { restaurant: view, categories: await this.menus.publicCategories(row.id, row.menuVersion, branch.id) };
+    if (view.availability !== 'AVAILABLE') return { restaurant: view, categories: [], recommendations: [] };
+    const categories = await this.menus.publicCategories(row.id, row.menuVersion, branch.id);
+    // Suggestions follow this branch's menu: only orderable dishes are offered.
+    return { restaurant: view, categories, recommendations: await this.recommendations.publicFor(row.id, categories) };
   }
 
   private async resolvePublic(rawSubdomain: string, branchSlug?: string): Promise<{ row: RestaurantRow; branch: Branch; view: PublicRestaurant }> {
@@ -239,6 +243,7 @@ export class RestaurantsService {
         accepting: access.features.ordering && branch.orderingEnabled && !branch.ordersPaused,
         dineIn: branch.acceptsDineIn,
         pickup: branch.acceptsPickup,
+        serviceRequests: access.features.ordering && restaurant.serviceRequestsEnabled,
       },
       ...this.branding(restaurant, branch),
       branch: this.toPublicBranch(branch, access.features.ordering),
@@ -296,6 +301,12 @@ export class RestaurantsService {
       createdAt: restaurant.createdAt.toISOString(),
       access,
       ordering: orderingSettings(main, access.features.ordering),
+      serviceRequests: {
+        enabled: restaurant.serviceRequestsEnabled,
+        cooldownSeconds: restaurant.serviceRequestCooldownSeconds,
+        hourlyLimit: restaurant.serviceRequestHourlyLimit,
+      },
+      orderPrepMinutes: restaurant.orderPrepMinutes,
       mainBranchId: main.id,
       branchCount,
       ...this.branding(restaurant, main),

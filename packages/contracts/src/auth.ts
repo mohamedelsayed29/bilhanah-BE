@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { emailSchema, type Language, languageSchema } from './common.js';
+import type { Permission } from './permissions.js';
 
 export const AUTH_ERROR_CODES = {
   UNAUTHENTICATED: 'UNAUTHENTICATED',
@@ -11,7 +12,7 @@ export const AUTH_ERROR_CODES = {
   ORIGIN_NOT_ALLOWED: 'ORIGIN_NOT_ALLOWED',
 } as const;
 
-export const userRoleSchema = z.enum(['OWNER', 'ADMIN', 'KITCHEN', 'MANAGER']);
+export const userRoleSchema = z.enum(['OWNER', 'ADMIN', 'KITCHEN', 'MANAGER', 'CASHIER', 'WAITER']);
 export type UserRole = z.infer<typeof userRoleSchema>;
 
 /** Restaurant-owner password. Administrators have a longer minimum (see the backend admin command). */
@@ -59,6 +60,8 @@ export type AuthUser = {
   preferredLanguage: Language;
   role: UserRole;
   emailVerified: boolean;
+  /** What a restaurant account may do (see permissions.ts); [] for administrators. */
+  permissions: Permission[];
 };
 
 /** A signed-in device, as listed on the account page. */

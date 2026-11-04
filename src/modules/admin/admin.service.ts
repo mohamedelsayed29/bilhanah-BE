@@ -274,17 +274,33 @@ export class AdminService {
   }
 
   async auditLog(query: z.output<typeof adminAuditQuerySchema>): Promise<Paginated<AuditEntry>> {
+    const where: Prisma.AuditLogWhereInput = query.scope === 'restaurant' ? { restaurantId: { not: null } } : query.scope === 'platform' ? { restaurantId: null } : {};
     const [items, total] = await Promise.all([
       this.prisma.auditLog.findMany({
+        where,
         orderBy: { createdAt: 'desc' },
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
         include: { actor: { select: { id: true, fullName: true, email: true } } },
       }),
-      this.prisma.auditLog.count(),
+      this.prisma.auditLog.count({ where }),
     ]);
+    // The restaurant each entry concerns: its own column, the target, or the one its metadata names.
+    const restaurantOf = (entry: (typeof items)[number]): string | null => {
+      const metadata = (entry.metadata ?? {}) as Record<string, unknown>;
+      if (entry.restaurantId) return entry.restaurantId;
+      if (entry.targetType === 'restaurant' && entry.targetId) return entry.targetId;
+      return typeof metadata['restaurantId'] === 'string' ? metadata['restaurantId'] : null;
+    };
+    const ids = [...new Set(items.map(restaurantOf).filter((id): id is string => id !== null))];
+    const names = new Map((await this.prisma.restaurant.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })).map((row) => [row.id, row.name]));
     return {
       items: items.map((entry) => ({
+        scope: entry.restaurantId ? ('restaurant' as const) : ('platform' as const),
+        restaurant: (() => {
+          const id = restaurantOf(entry);
+          return id && names.has(id) ? { id, name: names.get(id)! } : null;
+        })(),
         id: entry.id,
         action: entry.action,
         targetType: entry.targetType,

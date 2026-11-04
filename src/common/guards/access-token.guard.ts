@@ -1,5 +1,5 @@
 import { type CanActivate, type ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
-import { AUTH_ERROR_CODES } from '@bilhanah/contracts';
+import { AUTH_ERROR_CODES, effectivePermissions } from '@bilhanah/contracts';
 import type { Request } from 'express';
 import { AccessTokenService } from '../../modules/auth/access-token.service.js';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
@@ -34,7 +34,7 @@ export class AccessTokenGuard implements CanActivate {
 
     const session = await this.prisma.session.findUnique({
       where: { id: claims.sid },
-      select: { userId: true, revokedAt: true, expiresAt: true, user: { select: { role: true, status: true } } },
+      select: { userId: true, revokedAt: true, expiresAt: true, user: { select: { role: true, status: true, permissionGrants: true } } },
     });
     if (
       !session ||
@@ -46,7 +46,12 @@ export class AccessTokenGuard implements CanActivate {
       throw unauthenticated();
     }
 
-    request.auth = { userId: claims.sub, sessionId: claims.sid, role: session.user.role };
+    request.auth = {
+      userId: claims.sub,
+      sessionId: claims.sid,
+      role: session.user.role,
+      permissions: new Set(effectivePermissions(session.user.role, session.user.permissionGrants)),
+    };
     return true;
   }
 }

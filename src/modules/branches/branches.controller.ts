@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { type AuthContext, CurrentAuth } from '../../common/decorators/current-auth.decorator.js';
 import { AccessTokenGuard } from '../../common/guards/access-token.guard.js';
 import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
-import { RequireRole, RolesGuard } from '../../common/guards/roles.guard.js';
+import { RequireAnyPermission, RequirePermission, RestaurantMember, RolesGuard } from '../../common/guards/roles.guard.js';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
 import { BranchesService } from './branches.service.js';
 
@@ -23,18 +23,20 @@ const idParam = new ZodValidationPipe(z.uuid());
 const WRITE_LIMIT = { name: 'branches-write:ip', limit: 300, windowSeconds: 60, by: 'ip' } as const;
 
 /**
- * A restaurant's branches. Owners manage them all; managers see and run their
- * own; kitchen screens read them and mark dishes sold out. Branch ids are
- * checked against the caller's restaurant and branch in the service.
+ * A restaurant's branches. branches.manage adds, removes and reorders them; anyone in the restaurant
+ * reads the ones they work at; settings.operational runs a branch's hours and switches; the menu
+ * routes need a menu permission. Branch ids are checked against the caller's restaurant and branch
+ * in the service.
  */
 @Controller('branches')
 @UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
-@RequireRole('OWNER')
+@RequirePermission('branches.manage')
 export class BranchesController {
   constructor(private readonly branches: BranchesService) {}
 
+  /** Any restaurant account (not administrators): its screens need to know their branches. */
   @Get()
-  @RequireRole('OWNER', 'MANAGER', 'KITCHEN')
+  @RestaurantMember()
   @Header('Cache-Control', 'no-store')
   list(@CurrentAuth() auth: AuthContext): Promise<BranchList> {
     return this.branches.list(auth.userId);
@@ -56,14 +58,15 @@ export class BranchesController {
   }
 
   @Get(':id')
-  @RequireRole('OWNER', 'MANAGER', 'KITCHEN')
+  @RestaurantMember()
   @Header('Cache-Control', 'no-store')
   get(@CurrentAuth() auth: AuthContext, @Param('id', idParam) id: string): Promise<OwnerBranch> {
     return this.branches.get(auth.userId, id);
   }
 
+  /** Renaming, moving and archiving also need branches.manage (checked in the service). */
   @Patch(':id')
-  @RequireRole('OWNER', 'MANAGER')
+  @RequirePermission('settings.operational')
   @RateLimit(WRITE_LIMIT)
   update(
     @CurrentAuth() auth: AuthContext,
@@ -90,14 +93,15 @@ export class BranchesController {
   // --- Menu overrides ------------------------------------------------------------
 
   @Get(':id/menu')
-  @RequireRole('OWNER', 'MANAGER', 'KITCHEN')
+  @RequireAnyPermission('menu.view', 'menu.availability', 'menu.branch')
   @Header('Cache-Control', 'no-store')
   menu(@CurrentAuth() auth: AuthContext, @Param('id', idParam) id: string): Promise<BranchMenu> {
     return this.branches.menu(auth.userId, id);
   }
 
+  /** menu.availability for sold out; menu.branch for hiding and prices (checked in the service). */
   @Put(':id/menu/items/:itemId')
-  @RequireRole('OWNER', 'MANAGER', 'KITCHEN')
+  @RequireAnyPermission('menu.availability', 'menu.branch')
   @RateLimit(WRITE_LIMIT)
   setItem(
     @CurrentAuth() auth: AuthContext,
@@ -109,7 +113,7 @@ export class BranchesController {
   }
 
   @Post(':id/menu/reset')
-  @RequireRole('OWNER', 'MANAGER')
+  @RequirePermission('menu.branch')
   @HttpCode(HttpStatus.OK)
   @RateLimit(WRITE_LIMIT)
   resetMenu(@CurrentAuth() auth: AuthContext, @Param('id', idParam) id: string): Promise<BranchMenuReset> {

@@ -1,8 +1,10 @@
+import type { OrderItemStatus, OrderPriority } from './kitchen-display.js';
 import { z } from 'zod';
+import { orderLineRecommendationSchema } from './recommendations.js';
 import type { ImageSet } from './media.js';
 import { languageSchema } from './common.js';
 import { isPushServiceEndpoint } from './push.js';
-import type { OrderingSettings } from './restaurants.js';
+import { ORDER_PREP_MINUTES, type OrderingSettings } from './restaurants.js';
 import { BRANCH_SLUG_PATTERN } from './branches.js';
 
 export const ORDER_TYPES = ['DINE_IN', 'PICKUP'] as const;
@@ -38,11 +40,16 @@ export const ORDER_ERROR_CODES = {
   INVALID_STATUS_CHANGE: 'INVALID_STATUS_CHANGE',
   TABLE_LABEL_TAKEN: 'TABLE_LABEL_TAKEN',
   TABLE_LIMIT_REACHED: 'TABLE_LIMIT_REACHED',
+  TABLE_AREA_NOT_FOUND: 'TABLE_AREA_NOT_FOUND',
+  TABLE_AREA_NAME_TAKEN: 'TABLE_AREA_NAME_TAKEN',
+  TABLE_AREA_LIMIT_REACHED: 'TABLE_AREA_LIMIT_REACHED',
+  /** The area still has tables: say where they go (moveTo). details: { tables, activeOrders } */
+  TABLE_AREA_NOT_EMPTY: 'TABLE_AREA_NOT_EMPTY',
   /** Rejected and cancelled orders have no bill to pay. */
   ORDER_NOT_PAYABLE: 'ORDER_NOT_PAYABLE',
 } as const;
 
-export const ORDER_LIMITS = { lines: 30, quantity: 50, tables: 300, bulkTables: 100 } as const;
+export const ORDER_LIMITS = { lines: 30, quantity: 50, tables: 300, bulkTables: 100, tableAreas: 30 } as const;
 
 const optionalText = (max: number) =>
   z
@@ -65,6 +72,8 @@ export const orderLineSchema = z.strictObject({
   variantId: z.uuid(),
   quantity: z.number().int().min(1).max(ORDER_LIMITS.quantity),
   note: optionalText(200),
+  /** Added from a suggestion (see recommendations.ts): kept for its conversion and revenue. */
+  recommendation: orderLineRecommendationSchema.optional(),
 });
 
 /**
@@ -100,8 +109,16 @@ export const updateOrderStatusSchema = z
     status: z.enum(['ACCEPTED', 'PREPARING', 'READY', 'COMPLETED', 'REJECTED', 'CANCELLED']),
     /** Shown to the diner; required for rejected and cancelled orders. */
     reason: optionalText(300),
+    /**
+     * Minutes until it should be ready, from now: shown to the diner. When accepting without it, the
+     * restaurant's usual time (orderPrepMinutes) is used. Accepting or preparing only.
+     */
+    prepMinutes: z.number().int().min(ORDER_PREP_MINUTES.min).max(ORDER_PREP_MINUTES.max).optional(),
   })
   .superRefine((change, context) => {
+    if (change.prepMinutes !== undefined && change.status !== 'ACCEPTED' && change.status !== 'PREPARING') {
+      context.addIssue({ code: 'custom', path: ['prepMinutes'], message: 'Only accepted or preparing orders take a preparation time.' });
+    }
     if ((change.status === 'REJECTED' || change.status === 'CANCELLED') && !change.reason) {
       context.addIssue({ code: 'custom', path: ['reason'], message: 'Tell the customer why.' });
     }
@@ -136,6 +153,13 @@ export type OrderLine = {
   quantity: number;
   note: string | null;
   lineTotalPiastres: number;
+  /** The kitchen station it was routed to (null: the default station) and its name then. */
+  stationId: string | null;
+  stationName: string | null;
+  /** Its own preparation step on the kitchen display. */
+  prepStatus: OrderItemStatus;
+  startedAt: string | null;
+  readyAt: string | null;
 };
 
 type OrderCore = {
@@ -155,18 +179,31 @@ type OrderCore = {
   rejectionReason: string | null;
   /** When the restaurant marked the bill paid; null while unpaid. */
   paidAt: string | null;
+  /** When the restaurant expects it ready; null without an estimate. Kept once ready (for comparison). */
+  estimatedReadyAt: string | null;
+  /** Every status the order went through, oldest first (starting with PLACED). */
+  history: OrderStatusStep[];
   /** Changes on every update; the newer of two copies has the later value. */
   updatedAt: string;
 };
 
+/** One step of an order's history. */
+export type OrderStatusStep = { status: OrderStatus; at: string; reason: string | null };
+
+/** In the restaurant's view, who made the change: null for the diner placing it. */
+export type OwnerOrderStatusStep = OrderStatusStep & { actorName: string | null };
+
 /** An order as the restaurant sees it. */
-export type OwnerOrder = OrderCore & {
+export type OwnerOrder = Omit<OrderCore, 'history'> & {
+  history: OwnerOrderStatusStep[];
   id: string;
   branchId: string;
   branchName: string;
   customerPhone: string | null;
   /** The diner turned on Web Push for this order, so they hear when it is ready. */
   notifiesDiner: boolean;
+  /** RUSH orders go first on the kitchen display. */
+  priority: OrderPriority;
 };
 
 /** An order as the diner sees it on the tracking page. */
@@ -178,7 +215,38 @@ export type PublicOrder = OrderCore & {
 
 export type PlaceOrderResponse = { trackingToken: string; order: PublicOrder };
 
+/** GET /v1/orders/tracking-stats: how diners follow their orders. */
+export const trackingStatsQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(365).default(30),
+  branchId: z.uuid().optional(),
+});
+
+/**
+ * Over the last `days` (orders that were not rejected or cancelled): how many diners opened the
+ * tracking page, how many "ready" notifications reached a browser out of the orders that asked for
+ * one, how often orders were ready by their estimate, and how many service requests came from a
+ * table while its order was on the way (a sign diners asked the staff about it).
+ */
+export type OrderTrackingStats = {
+  days: number;
+  orders: number;
+  tracked: number;
+  trackingRate: number | null;
+  /** Orders that reached ready with notifications turned on. */
+  readyAlertOrders: number;
+  readyNotified: number;
+  readyDeliveryRate: number | null;
+  /** Orders with an estimate that reached ready. */
+  estimatedOrders: number;
+  readyOnTime: number;
+  onTimeRate: number | null;
+  statusEnquiries: number;
+};
+
 // --- Ready alerts -------------------------------------------------------------
+
+export const ORDER_PUSH_UPDATES = ['READY', 'ALL'] as const;
+export type OrderPushUpdates = (typeof ORDER_PUSH_UPDATES)[number];
 
 const base64url = /^[A-Za-z0-9_-]+={0,2}$/;
 
@@ -197,6 +265,8 @@ export const pushSubscriptionSchema = z.object({
     auth: z.string().regex(base64url).min(16).max(32),
   }),
   language: languageSchema.default('ar'),
+  /** READY: the order is ready (or will not come). ALL: also when it is accepted and being prepared. */
+  updates: z.enum(ORDER_PUSH_UPDATES).default('READY'),
 });
 
 /** DELETE /v1/public/orders/:token/push */
@@ -208,7 +278,27 @@ export const pushUnsubscribeSchema = z.object({ endpoint: z.string().max(2048) }
 export const TABLE_SHAPES = ['ROUND', 'SQUARE', 'RECTANGLE'] as const;
 export type TableShape = (typeof TABLE_SHAPES)[number];
 export const TABLE_SEATS = { min: 1, max: 20, default: 4 } as const;
+/** Where a table stands: inside the restaurant, or outside (a terrace, the street). */
+export const TABLE_LOCATIONS = ['INDOOR', 'OUTDOOR'] as const;
+export type TableLocation = (typeof TABLE_LOCATIONS)[number];
 const tableShape = z.enum(TABLE_SHAPES);
+const tableLocation = z.enum(TABLE_LOCATIONS);
+/** A table's area: an area of the same branch, or null for none. A table in an area takes the area's location. */
+const tableAreaId = z.uuid().nullable();
+
+/** What a table offers, shown on its details and used to seat the right guests. */
+export const TABLE_ATTRIBUTES = ['WINDOW', 'SOFA', 'VIP', 'ACCESSIBLE', 'POWER_OUTLET', 'QUIET', 'SMOKING'] as const;
+export type TableAttribute = (typeof TABLE_ATTRIBUTES)[number];
+/** A table's minimum order, notes and attributes (all optional; null or [] clears them). */
+const tableDetails = {
+  minOrderPiastres: z.number().int().min(0).max(10_000_000).nullable().optional(),
+  notes: optionalText(200),
+  attributes: z.array(z.enum(TABLE_ATTRIBUTES)).max(TABLE_ATTRIBUTES.length).transform((list) => [...new Set(list)]).optional(),
+};
+/** A spot on the floor plan, in percent of its width and height. */
+const floorCoordinate = z.number().min(0).max(100).nullable();
+/** How far a table can be resized on the plan (1 = its natural size). */
+export const TABLE_FLOOR_SCALE = { min: 0.6, max: 1.8 } as const;
 const tableSeats = z.number().int().min(TABLE_SEATS.min).max(TABLE_SEATS.max);
 
 export const createTableSchema = z.strictObject({
@@ -217,6 +307,9 @@ export const createTableSchema = z.strictObject({
   label: z.string().trim().min(1).max(40),
   shape: tableShape.default('SQUARE'),
   seats: tableSeats.default(TABLE_SEATS.default),
+  location: tableLocation.default('INDOOR'),
+  areaId: tableAreaId.optional(),
+  ...tableDetails,
 });
 
 /** Creates tables "{prefix} {from}" ... "{prefix} {to}" (no space after a prefix ending in a symbol, e.g. "T-"), skipping labels that already exist. */
@@ -228,6 +321,8 @@ export const bulkCreateTablesSchema = z
     prefix: z.string().trim().max(20).default(''),
     shape: tableShape.default('SQUARE'),
     seats: tableSeats.default(TABLE_SEATS.default),
+    location: tableLocation.default('INDOOR'),
+    areaId: tableAreaId.optional(),
   })
   .refine((range) => range.to >= range.from && range.to - range.from < ORDER_LIMITS.bulkTables, {
     message: `Create up to ${ORDER_LIMITS.bulkTables} tables at a time.`,
@@ -239,6 +334,16 @@ export const updateTableSchema = z.strictObject({
   isActive: z.boolean().optional(),
   shape: tableShape.optional(),
   seats: tableSeats.optional(),
+  location: tableLocation.optional(),
+  /** Moves the table to another area of its branch, or out of any area (null). */
+  areaId: tableAreaId.optional(),
+  ...tableDetails,
+  /** Where it was dropped on the floor plan; null puts it back to automatic placement. */
+  floorX: floorCoordinate.optional(),
+  floorY: floorCoordinate.optional(),
+  /** Degrees clockwise; any whole number, kept as 0-359. */
+  floorRotation: z.number().int().min(-3600).max(3600).transform((degrees) => ((degrees % 360) + 360) % 360).optional(),
+  floorScale: z.number().min(TABLE_FLOOR_SCALE.min).max(TABLE_FLOOR_SCALE.max).optional(),
 });
 
 export type RestaurantTable = {
@@ -247,12 +352,66 @@ export type RestaurantTable = {
   label: string;
   shape: TableShape;
   seats: number;
+  location: TableLocation;
+  areaId: string | null;
+  /** On the floor plan, in percent; null until the owner places it. */
+  floorX: number | null;
+  floorY: number | null;
+  /** Degrees clockwise (0-359). */
+  floorRotation: number;
+  /** 1 = its natural size (TABLE_FLOOR_SCALE bounds it). */
+  floorScale: number;
+  minOrderPiastres: number | null;
+  notes: string | null;
+  attributes: TableAttribute[];
   publicCode: string;
   isActive: boolean;
   /** The URL printed in this table's QR code. */
   qrUrl: string;
   createdAt: string;
 };
+
+// --- Table areas --------------------------------------------------------------
+
+/** How an area is drawn on the floor plan. Without one, indoor areas are a hall and outdoor ones a terrace. */
+export const TABLE_AREA_THEMES = ['HALL', 'GARDEN', 'ROOFTOP', 'TERRACE', 'VIP', 'SMOKING'] as const;
+export type TableAreaTheme = (typeof TABLE_AREA_THEMES)[number];
+
+/** POST /v1/table-areas: a seating area of a branch (the main branch, or the manager's, when omitted). */
+export const createTableAreaSchema = z.strictObject({
+  branchId: z.uuid().optional(),
+  name: z.string().trim().min(1).max(40),
+  location: tableLocation.default('INDOOR'),
+  theme: z.enum(TABLE_AREA_THEMES).optional(),
+});
+
+/** PATCH /v1/table-areas/:id. A new location applies to every table in the area. */
+export const updateTableAreaSchema = z.strictObject({
+  name: z.string().trim().min(1).max(40).optional(),
+  location: tableLocation.optional(),
+  theme: z.enum(TABLE_AREA_THEMES).optional(),
+});
+
+/**
+ * DELETE /v1/table-areas/:id?moveTo=: where the area's tables go, another area of the same branch
+ * or "none" (no area). Required while the area has tables; their orders stay with them.
+ */
+export const deleteTableAreaQuerySchema = z.object({ moveTo: z.union([z.uuid(), z.literal('none')]).optional() });
+
+export type TableArea = {
+  id: string;
+  branchId: string;
+  name: string;
+  location: TableLocation;
+  theme: TableAreaTheme;
+  tableCount: number;
+  /** Unpaid orders on its tables (as on the floor plan). */
+  activeOrders: number;
+  createdAt: string;
+};
+
+/** A pending or confirmed booking holds its table from this long before its time until this long after. */
+export const TABLE_RESERVED_WINDOW = { beforeMinutes: 120, afterMinutes: 30 } as const;
 
 /** Unpaid orders older than this no longer keep a table occupied (a forgotten bill must not block it forever). */
 export const TABLE_OCCUPANCY_HOURS = 12;
@@ -269,7 +428,11 @@ export type TableOccupancy = {
   label: string;
   shape: TableShape;
   seats: number;
+  location: TableLocation;
+  areaId: string | null;
   occupied: boolean;
+  /** The booking that holds it now (see TABLE_RESERVED_WINDOW), when it is not occupied. */
+  reservation: { id: string; customerName: string; reservedAt: string; guests: number } | null;
   /** Oldest first. */
   openOrders: TableOpenOrder[];
   unpaidPiastres: number;

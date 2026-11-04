@@ -22,6 +22,8 @@ Object.assign(process.env, {
   DATABASE_URL: databaseUrl.toString(),
   REDIS_URL: redisUrl.toString(),
   CORS_ORIGINS: 'http://dashboard.test',
+  // The admin console shares the dashboard's test origin (tests sign administrators in from it).
+  ADMIN_ORIGINS: 'http://dashboard.test',
   DASHBOARD_URL: 'http://dashboard.test',
   RESTAURANT_URL_TEMPLATE: 'https://{subdomain}.bilhanah.test',
   JWT_ACCESS_SECRET: 'e2e-test-secret-that-is-at-least-32-characters',

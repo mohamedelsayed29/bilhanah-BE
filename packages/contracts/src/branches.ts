@@ -68,7 +68,7 @@ const branchDetails = {
 export const createBranchSchema = z.strictObject({
   ...branchDetails,
   slug: branchSlugSchema,
-  /** Copy tables (names, shapes, seats; new QR codes) from another branch. */
+  /** Copy tables (names, shapes, seats, locations, areas; new QR codes) from another branch. */
   copyTablesFrom: z.uuid().optional(),
 });
 

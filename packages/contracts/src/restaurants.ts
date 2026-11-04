@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { SERVICE_REQUEST_THROTTLE } from './service-requests.js';
+import type { PublicRecommendation } from './recommendations.js';
 import { type Language, languageSchema } from './common.js';
 import { MENU_THEMES, type MenuTheme } from './themes.js';
 import type { ImageSet } from './media.js';
@@ -7,6 +9,9 @@ import { type OpeningHours, openingHoursSchema } from './opening-hours.js';
 import type { RestaurantAccess } from './plans.js';
 import type { PublicBranch } from './branches.js';
 import { normalizeSubdomain, subdomainProblem, type SubdomainProblem } from './subdomains.js';
+
+/** Minutes the restaurant may give as an order's preparation estimate. */
+export const ORDER_PREP_MINUTES = { min: 5, max: 120 } as const;
 
 export const RESTAURANT_ERROR_CODES = {
   FORBIDDEN: 'FORBIDDEN',
@@ -113,7 +118,16 @@ export const updateRestaurantSchema = z.strictObject({
   acceptsDineIn: z.boolean().optional(),
   acceptsPickup: z.boolean().optional(),
   ordersPaused: z.boolean().optional(),
+  /** Table service requests from the menu, and their throttling (see service-requests.ts). */
+  serviceRequestsEnabled: z.boolean().optional(),
+  serviceRequestCooldownSeconds: z.number().int().min(SERVICE_REQUEST_THROTTLE.cooldownSeconds.min).max(SERVICE_REQUEST_THROTTLE.cooldownSeconds.max).optional(),
+  serviceRequestHourlyLimit: z.number().int().min(SERVICE_REQUEST_THROTTLE.hourlyLimit.min).max(SERVICE_REQUEST_THROTTLE.hourlyLimit.max).optional(),
+  /** The usual preparation time diners see when an order is accepted; null shows none. */
+  orderPrepMinutes: z.number().int().min(ORDER_PREP_MINUTES.min).max(ORDER_PREP_MINUTES.max).nullable().optional(),
 });
+
+/** Table service requests: switched on, and how they are throttled. */
+export type ServiceRequestSettings = { enabled: boolean; cooldownSeconds: number; hourlyLimit: number };
 
 export type OrderingSettings = {
   /** The plan includes ordering. */
@@ -124,8 +138,11 @@ export type OrderingSettings = {
   paused: boolean;
 };
 
-/** What diners need to decide whether to show the cart. Opening hours are checked separately. */
-export type PublicOrdering = { accepting: boolean; dineIn: boolean; pickup: boolean };
+/**
+ * What diners need to decide whether to show the cart. Opening hours are checked separately.
+ * `serviceRequests`: a diner at a table can call the staff from the menu.
+ */
+export type PublicOrdering = { accepting: boolean; dineIn: boolean; pickup: boolean; serviceRequests: boolean };
 
 /** Presentation shared by the owner and public views. */
 export type RestaurantBranding = {
@@ -159,6 +176,9 @@ export type OwnerRestaurant = {
   access: RestaurantAccess;
   /** The main branch's ordering settings (openingHours is the main branch's too). */
   ordering: OrderingSettings;
+  serviceRequests: ServiceRequestSettings;
+  /** The usual preparation time shown to diners on accepted orders; null shows none. */
+  orderPrepMinutes: number | null;
   mainBranchId: string;
   /** Active branches. */
   branchCount: number;
@@ -190,4 +210,6 @@ export type PublicRestaurant =
 export type PublicMenuResponse = {
   restaurant: PublicRestaurant;
   categories: PublicMenuCategory[];
+  /** Suggestions for this branch's menu (see recommendations.ts); empty when there are none. */
+  recommendations: PublicRecommendation[];
 };

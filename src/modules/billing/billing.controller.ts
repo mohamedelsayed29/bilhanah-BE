@@ -5,7 +5,7 @@ import type { z } from 'zod';
 import { type AuthContext, CurrentAuth } from '../../common/decorators/current-auth.decorator.js';
 import { AccessTokenGuard } from '../../common/guards/access-token.guard.js';
 import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
-import { RequireRole, RolesGuard } from '../../common/guards/roles.guard.js';
+import { RequirePermission, RolesGuard } from '../../common/guards/roles.guard.js';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
 import { BillingService } from './billing.service.js';
 
@@ -21,7 +21,7 @@ export function sendReceipt(response: Response, image: Buffer): StreamableFile {
 /** The owner's subscription: plans, how to pay, and transfers sent for review. */
 @Controller('billing')
 @UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
-@RequireRole('OWNER')
+@RequirePermission('billing.manage')
 export class BillingController {
   constructor(private readonly billing: BillingService) {}
 

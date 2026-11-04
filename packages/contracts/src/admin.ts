@@ -33,7 +33,13 @@ export const adminPaymentsQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
 
+export const AUDIT_SCOPES = ['platform', 'restaurant'] as const;
+/** platform: the admin console and payments; restaurant: what restaurants did themselves (their staff changes). */
+export type AuditScope = (typeof AUDIT_SCOPES)[number];
+
 export const adminAuditQuerySchema = z.object({
+  /** One kind of change; both when omitted. */
+  scope: z.enum(AUDIT_SCOPES).optional(),
   page: z.coerce.number().int().min(1).max(10_000).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(50),
 });
@@ -150,4 +156,8 @@ export type AuditEntry = {
   actor: { id: string; name: string; email: string } | null;
   ipAddress: string | null;
   createdAt: string;
+  /** Where the change came from: the admin console (and payments), or a restaurant's own dashboard. */
+  scope: AuditScope;
+  /** The restaurant it concerns, by name, when there is one. */
+  restaurant: { id: string; name: string } | null;
 };

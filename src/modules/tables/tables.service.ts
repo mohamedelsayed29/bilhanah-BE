@@ -17,6 +17,7 @@ import type { Env } from '../../config/env.schema.js';
 import { isUniqueViolation } from '../../infrastructure/database/prisma-errors.js';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { BranchScopeService } from '../branches/branch-scope.service.js';
+import { tableAreaNotFound } from './table-areas.service.js';
 
 const tableNotFound = () => new NotFoundException({ code: ORDER_ERROR_CODES.TABLE_NOT_FOUND, message: 'Table not found.' });
 const labelTaken = () =>
@@ -51,7 +52,8 @@ export class TablesService {
 
   async create(userId: string, input: z.output<typeof createTableSchema>): Promise<RestaurantTable> {
     const { restaurant, branch } = await this.target(userId, input.branchId);
-    const { branchId: _branch, ...fields } = input;
+    const { branchId: _branch, areaId, ...fields } = input;
+    Object.assign(fields, await this.placement(branch.id, areaId));
     const { _count, _max } = await this.prisma.table.aggregate({ where: { branchId: branch.id }, _count: true, _max: { sortOrder: true } });
     if (_count >= ORDER_LIMITS.tables) throw this.limitReached();
     try {
@@ -65,7 +67,7 @@ export class TablesService {
     }
   }
 
-  /** Creates {prefix}{from} ... {prefix}{to}, all of one shape and size; labels that already exist are skipped. */
+  /** Creates {prefix}{from} ... {prefix}{to}, all of one shape, size and location; labels that already exist are skipped. */
   async createRange(userId: string, input: z.output<typeof bulkCreateTablesSchema>): Promise<RestaurantTable[]> {
     const { restaurant, branch } = await this.target(userId, input.branchId);
     const existing = await this.prisma.table.findMany({ where: { branchId: branch.id }, select: { label: true, sortOrder: true } });
@@ -77,6 +79,7 @@ export class TablesService {
     );
     if (existing.length + labels.length > ORDER_LIMITS.tables) throw this.limitReached();
     const start = Math.max(-1, ...existing.map((table) => table.sortOrder)) + 1;
+    const placement = { location: input.location, ...(await this.placement(branch.id, input.areaId)) };
     await this.prisma.table.createMany({
       data: labels.map((label, index) => ({
         restaurantId: restaurant.id,
@@ -84,6 +87,7 @@ export class TablesService {
         label,
         shape: input.shape,
         seats: input.seats,
+        ...placement,
         publicCode: newPublicCode(),
         sortOrder: start + index,
       })),
@@ -94,8 +98,14 @@ export class TablesService {
 
   async update(userId: string, tableId: string, input: z.output<typeof updateTableSchema>): Promise<RestaurantTable> {
     const { restaurant, where } = await this.own(userId);
+    const current = await this.prisma.table.findFirst({ where: { id: tableId, ...where }, select: { branchId: true, areaId: true } });
+    if (!current) throw tableNotFound();
+    // A table in an area stands where the area does: moving it moves its location, and its own
+    // location only changes while it is in no area.
+    const { areaId, ...fields } = input;
+    const data = { ...fields, ...(await this.placement(current.branchId, areaId === undefined ? current.areaId : areaId)), ...(areaId !== undefined && { areaId }) };
     try {
-      const updated = await this.prisma.table.updateMany({ where: { id: tableId, ...where }, data: input });
+      const updated = await this.prisma.table.updateMany({ where: { id: tableId, ...where }, data });
       if (updated.count === 0) throw tableNotFound();
     } catch (error) {
       if (isUniqueViolation(error)) throw labelTaken();
@@ -136,6 +146,15 @@ export class TablesService {
       label: table.label,
       shape: table.shape,
       seats: table.seats,
+      location: table.location,
+      areaId: table.areaId,
+      floorX: table.floorX,
+      floorY: table.floorY,
+      floorRotation: table.floorRotation,
+      floorScale: table.floorScale,
+      minOrderPiastres: table.minOrderPiastres,
+      notes: table.notes,
+      attributes: table.attributes,
       publicCode: table.publicCode,
       isActive: table.isActive,
       qrUrl: `${this.urlTemplate.replace('{subdomain}', subdomain)}/?t=${table.publicCode}`,
@@ -149,6 +168,14 @@ export class TablesService {
       message: `A branch can have at most ${ORDER_LIMITS.tables} tables.`,
       details: { limit: ORDER_LIMITS.tables },
     });
+  }
+
+  /** A table's area, checked to be of its branch; a table in an area takes the area's location. */
+  private async placement(branchId: string, areaId: string | null | undefined): Promise<{ areaId?: string | null; location?: Table['location'] }> {
+    if (!areaId) return areaId === null ? { areaId: null } : {};
+    const area = await this.prisma.tableArea.findFirst({ where: { id: areaId, branchId }, select: { id: true, location: true } });
+    if (!area) throw tableAreaNotFound();
+    return { areaId: area.id, location: area.location };
   }
 
   /** The branch new tables go to: the requested one (checked), the manager's, or the main branch. */

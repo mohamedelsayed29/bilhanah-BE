@@ -29,6 +29,8 @@ export const createCategorySchema = z.strictObject({
   nameAr: requiredText(80),
   nameEn: optionalText(80),
   isVisible: z.boolean().optional(),
+  /** The kitchen station preparing its dishes; null for the default station. */
+  stationId: z.uuid().nullable().optional(),
 });
 
 export const updateCategorySchema = createCategorySchema.partial();
@@ -64,6 +66,8 @@ const itemFields = {
   imageId: z.uuid().nullable().optional(),
   isAvailable: z.boolean().optional(),
   isVisible: z.boolean().optional(),
+  /** Its own kitchen station; null follows the category's. */
+  stationId: z.uuid().nullable().optional(),
   variants: variantsSchema,
 };
 
@@ -100,6 +104,8 @@ export type OwnerMenuItem = {
   isAvailable: boolean;
   isVisible: boolean;
   variants: MenuVariant[];
+  /** Its own kitchen station; null follows the category's. */
+  stationId: string | null;
 };
 
 export type OwnerMenuCategory = {
@@ -107,13 +113,15 @@ export type OwnerMenuCategory = {
   nameAr: string;
   nameEn: string | null;
   isVisible: boolean;
+  /** The kitchen station preparing its dishes; null for the default station. */
+  stationId: string | null;
   items: OwnerMenuItem[];
 };
 
 /** The owner's full menu, hidden entries included, in display order. */
 export type OwnerMenu = { categories: OwnerMenuCategory[] };
 
-export type PublicMenuItem = Omit<OwnerMenuItem, 'categoryId' | 'isVisible'>;
+export type PublicMenuItem = Omit<OwnerMenuItem, 'categoryId' | 'isVisible' | 'stationId'>;
 
 export type PublicMenuCategory = {
   id: string;

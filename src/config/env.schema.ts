@@ -31,6 +31,11 @@ export const envSchema = z.object({
   DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
   REDIS_URL: z.url({ protocol: /^rediss?$/ }),
   CORS_ORIGINS: commaSeparatedOrigins,
+  /**
+   * The platform admin console's origins (its own app, e.g. https://admin.bilhanah.com). Administrator
+   * sign-in and sessions only work from these; restaurant dashboards cannot use them. Empty: CORS_ORIGINS.
+   */
+  ADMIN_ORIGINS: commaSeparatedOrigins,
   TRUST_PROXY: trustProxy,
 
   JWT_ACCESS_SECRET: z.string().min(32),

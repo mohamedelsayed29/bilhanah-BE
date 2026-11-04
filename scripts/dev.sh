@@ -19,6 +19,8 @@ DASHBOARD_DIR="$(dirname "$ROOT")/bilhanah-dashboard-FE"
 WEB_PORT="${WEB_PORT:-5180}"
 # Fixed: the API allows this origin (CORS_ORIGINS) and email links point at it (DASHBOARD_URL).
 DASHBOARD_PORT=5174
+# The platform admin console: the same dashboard code as its own app, origin and session (ADMIN_ORIGINS).
+ADMIN_PORT=5175
 
 bold=$'\e[1m' red=$'\e[31m' green=$'\e[32m' yellow=$'\e[33m' blue=$'\e[34m' magenta=$'\e[35m' cyan=$'\e[36m' reset=$'\e[0m'
 step() { printf '%s==>%s %s\n' "$bold$blue" "$reset" "$*"; }
@@ -38,6 +40,11 @@ if [[ ! -f .env ]]; then
   sed -e "s|^JWT_ACCESS_SECRET=.*|JWT_ACCESS_SECRET=$secret|" \
       -e "s|^RESTAURANT_URL_TEMPLATE=.*|RESTAURANT_URL_TEMPLATE=http://{subdomain}.localhost:$WEB_PORT|" \
       .env.example > .env
+fi
+# The admin console's origin; older .env files get it too.
+if ! grep -q '^ADMIN_ORIGINS=' .env; then
+  step "Adding the admin console origin to .env"
+  printf '\n# The platform admin console (its own app and session).\nADMIN_ORIGINS=http://127.0.0.1:%s\n' "$ADMIN_PORT" >> .env
 fi
 # Web Push keys for order-ready alerts; older .env files get them too.
 if ! grep -q '^VAPID_PUBLIC_KEY=' .env; then
@@ -77,7 +84,7 @@ port_holder() {
     lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1 | grep . || return 1
   fi
 }
-for port in "$API_PORT" "$WEB_PORT" "$DASHBOARD_PORT"; do
+for port in "$API_PORT" "$WEB_PORT" "$DASHBOARD_PORT" "$ADMIN_PORT"; do
   if holder="$(port_holder "$port")"; then
     detail=""
     [[ -n "$holder" ]] && detail=" by: $(ps -o args= -p "$holder" | cut -c1-120)"
@@ -176,7 +183,8 @@ if [[ -f "$WEB_DIR/package.json" ]]; then
     VITE_DASHBOARD_URL=http://127.0.0.1:$DASHBOARD_PORT npm run --silent dev -- --port $WEB_PORT --strictPort"
 fi
 if [[ -f "$DASHBOARD_DIR/package.json" ]]; then
-  start dashboard "$yellow" "cd '$DASHBOARD_DIR' && VITE_API_URL=http://127.0.0.1:$API_PORT npm run --silent dev"
+  start dashboard "$yellow" "cd '$DASHBOARD_DIR' && VITE_API_URL=http://127.0.0.1:$API_PORT VITE_ADMIN_URL=http://127.0.0.1:$ADMIN_PORT npm run --silent dev"
+  start admin "$red" "cd '$DASHBOARD_DIR' && VITE_APP=admin VITE_API_URL=http://127.0.0.1:$API_PORT npm run --silent dev -- --port $ADMIN_PORT --strictPort"
 fi
 
 # Wait for the API, then print where everything is.
@@ -191,6 +199,7 @@ ${bold}${green}Bilhanah is running${reset}
   Website            http://127.0.0.1:$WEB_PORT
   Restaurant pages   http://<subdomain>.localhost:$WEB_PORT
   Dashboard          http://127.0.0.1:$DASHBOARD_PORT
+  Admin console      http://127.0.0.1:$ADMIN_PORT  (Bilhanah team only)
   API                http://127.0.0.1:$API_PORT  (health: /health/ready)
   Email (Mailpit)    http://127.0.0.1:8025
   Database           PostgreSQL at 127.0.0.1:55432  (npm run db:studio)

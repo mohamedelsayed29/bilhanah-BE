@@ -110,6 +110,15 @@ export class BranchesService {
           },
         });
         if (source) {
+          // The source's seating areas come along, and each copied table stays in its area.
+          const areas = await tx.tableArea.findMany({ where: { branchId: source.id }, orderBy: { sortOrder: 'asc' } });
+          const areaIds = new Map<string, string>();
+          for (const area of areas) {
+            const copy = await tx.tableArea.create({
+              data: { restaurantId: scope.restaurant.id, branchId: created.id, name: area.name, location: area.location, theme: area.theme, sortOrder: area.sortOrder },
+            });
+            areaIds.set(area.id, copy.id);
+          }
           const tables = await tx.table.findMany({ where: { branchId: source.id }, orderBy: { sortOrder: 'asc' } });
           await tx.table.createMany({
             data: tables.map((table) => ({
@@ -118,6 +127,12 @@ export class BranchesService {
               label: table.label,
               shape: table.shape,
               seats: table.seats,
+              location: table.location,
+              floorX: table.floorX,
+              floorY: table.floorY,
+              floorRotation: table.floorRotation,
+              floorScale: table.floorScale,
+              areaId: table.areaId ? (areaIds.get(table.areaId) ?? null) : null,
               isActive: table.isActive,
               sortOrder: table.sortOrder,
               publicCode: newTableCode(),
@@ -135,8 +150,8 @@ export class BranchesService {
 
   async update(userId: string, branchId: string, input: UpdateBranch): Promise<OwnerBranch> {
     const scope = await this.scopes.resolve(userId);
-    if (scope.role === 'KITCHEN') throw this.forbidden();
-    if (scope.role === 'MANAGER') {
+    this.scopes.require(scope, 'settings.operational');
+    if (!scope.permissions.has('branches.manage')) {
       const refused = OWNER_ONLY_BRANCH_FIELDS.filter((field) => input[field] !== undefined);
       if (refused.length) {
         throw new ForbiddenException({
@@ -256,9 +271,10 @@ export class BranchesService {
 
   async setItem(userId: string, branchId: string, itemId: string, input: SetBranchItem): Promise<BranchMenuItem> {
     const scope = await this.scopes.resolve(userId);
-    if (scope.role === 'KITCHEN' && (input.hidden !== undefined || input.prices !== undefined)) {
-      throw new ForbiddenException({ code: COMMON_ERROR_CODES.FORBIDDEN, message: 'Kitchen screens can only mark dishes sold out or back in stock.' });
+    if ((input.hidden !== undefined || input.prices !== undefined) && !scope.permissions.has('menu.branch')) {
+      throw new ForbiddenException({ code: COMMON_ERROR_CODES.FORBIDDEN, message: 'You can only mark dishes sold out or back in stock.' });
     }
+    if (input.available !== undefined) this.scopes.require(scope, 'menu.availability');
     this.assertWritable(scope);
     const branch = await this.scopes.branch(scope, branchId);
     const item = await this.prisma.menuItem.findFirst({ where: { id: itemId, restaurantId: scope.restaurant.id }, include: { variants: { select: { id: true } } } });
@@ -385,15 +401,17 @@ export class BranchesService {
     });
   }
 
+  /** Adding, removing, reordering branches and copying menus between them. */
   private async ownerScope(userId: string): Promise<Scope> {
     const scope = await this.scopes.resolve(userId);
-    if (scope.role !== 'OWNER') throw this.forbidden();
+    this.scopes.require(scope, 'branches.manage');
     return scope;
   }
 
+  /** A branch's own menu: hidden dishes and prices. */
   private async managerScope(userId: string): Promise<Scope> {
     const scope = await this.scopes.resolve(userId);
-    if (scope.role === 'KITCHEN') throw this.forbidden();
+    this.scopes.require(scope, 'menu.branch');
     return scope;
   }
 

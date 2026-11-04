@@ -36,6 +36,8 @@ export type RestaurantStats = {
   ordering: boolean;
   /** The branch the orders figures are for; null for the whole restaurant. Visits are always restaurant-wide. */
   branchId: string | null;
+  /** False without analytics.financial: every revenue and average figure is 0 and the dashboard hides them. */
+  financial: boolean;
 };
 
 export type PlatformStatsDay = {

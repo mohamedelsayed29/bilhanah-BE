@@ -5,6 +5,8 @@ import {
   type OrderAlerts,
   orderIdParamSchema,
   ordersQuerySchema,
+  type OrderTrackingStats,
+  trackingStatsQuerySchema,
   type OwnerOrder,
   type Paginated,
   type TableOccupancy,
@@ -15,28 +17,30 @@ import {
   pushSubscriptionSchema,
   pushUnsubscribeSchema,
   updateOrderStatusSchema,
+  type OrderItemEvent,
+  updateOrderItemsStatusSchema,
+  updateOrderPrioritySchema,
 } from '@bilhanah/contracts';
 import type { z } from 'zod';
 import { type AuthContext, CurrentAuth } from '../../common/decorators/current-auth.decorator.js';
 import { AccessTokenGuard } from '../../common/guards/access-token.guard.js';
 import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
-import { RequireRole, RolesGuard } from '../../common/guards/roles.guard.js';
+import { RequireAnyPermission, RequirePermission, RolesGuard } from '../../common/guards/roles.guard.js';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
 import { OrderAlertsService } from './order-alerts.service.js';
 import { OrdersService } from './orders.service.js';
 
 /**
  * The restaurant's orders: the live board, history, and status changes. Owners see every branch;
- * staff tied to a branch see only its orders. Kitchen accounts may read and move orders, nothing else;
- * managers also run the floor and mark bills paid.
+ * staff tied to a branch see only its orders. Each route needs a permission (see permissions.ts);
+ * which status change or payment change the caller may make is checked in the service.
  */
 @Controller('orders')
 @UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
-@RequireRole('OWNER')
+@RequirePermission('orders.view')
 export class OrdersController {
   constructor(private readonly orders: OrdersService) {}
 
-  @RequireRole('OWNER', 'MANAGER', 'KITCHEN')
   @Get()
   @Header('Cache-Control', 'no-store')
   list(@CurrentAuth() auth: AuthContext, @Query(new ZodValidationPipe(ordersQuerySchema)) query: z.output<typeof ordersQuerySchema>): Promise<Paginated<OwnerOrder>> {
@@ -45,29 +49,40 @@ export class OrdersController {
 
   /** Which tables have guests (an unpaid order) right now. Declared before :id. */
   @Get('floor')
-  @RequireRole('OWNER', 'MANAGER')
+  @RequirePermission('tables.view')
   @Header('Cache-Control', 'no-store')
   floor(@CurrentAuth() auth: AuthContext, @Query(new ZodValidationPipe(branchQuerySchema)) query: z.output<typeof branchQuerySchema>): Promise<TableOccupancy[]> {
     return this.orders.floor(auth.userId, query.branchId);
   }
 
+  /** Tracking usage, ready-notification delivery and status enquiries. Declared before :id. */
+  @Get('tracking-stats')
+  @RequirePermission('analytics.view')
+  @Header('Cache-Control', 'no-store')
+  trackingStats(
+    @CurrentAuth() auth: AuthContext,
+    @Query(new ZodValidationPipe(trackingStatsQuerySchema)) query: z.output<typeof trackingStatsQuerySchema>,
+  ): Promise<OrderTrackingStats> {
+    return this.orders.trackingStats(auth.userId, query);
+  }
+
   /** The guests at this table paid: marks its open orders paid. Returns the whole floor. */
   @Post('tables/:tableId/settle')
-  @RequireRole('OWNER', 'MANAGER')
+  @RequirePermission('payments.process')
   @HttpCode(HttpStatus.OK)
   @RateLimit({ name: 'order-status:ip', limit: 600, windowSeconds: 60, by: 'ip' })
   settleTable(@CurrentAuth() auth: AuthContext, @Param('tableId', new ZodValidationPipe(orderIdParamSchema)) tableId: string): Promise<TableOccupancy[]> {
     return this.orders.settleTable(auth.userId, tableId);
   }
 
-  @RequireRole('OWNER', 'MANAGER', 'KITCHEN')
   @Get(':id')
   @Header('Cache-Control', 'no-store')
   get(@CurrentAuth() auth: AuthContext, @Param('id', new ZodValidationPipe(orderIdParamSchema)) id: string): Promise<OwnerOrder> {
     return this.orders.get(auth.userId, id);
   }
 
-  @RequireRole('OWNER', 'MANAGER', 'KITCHEN')
+  /** orders.update to accept, prepare and mark ready; orders.complete to hand over; orders.cancel to reject or cancel. */
+  @RequireAnyPermission('orders.update', 'orders.complete', 'orders.cancel')
   @Patch(':id/status')
   @RateLimit({ name: 'order-status:ip', limit: 600, windowSeconds: 60, by: 'ip' })
   updateStatus(
@@ -78,8 +93,39 @@ export class OrdersController {
     return this.orders.updateStatus(auth.userId, id, body);
   }
 
+  /** The kitchen display moves dishes: orders.update to start and finish them, orders.complete to serve, orders.cancel to cancel. */
+  @RequireAnyPermission('orders.update', 'orders.complete', 'orders.cancel')
+  @Patch(':id/items/status')
+  @RateLimit({ name: 'order-status:ip', limit: 600, windowSeconds: 60, by: 'ip' })
+  updateItems(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', new ZodValidationPipe(orderIdParamSchema)) id: string,
+    @Body(new ZodValidationPipe(updateOrderItemsStatusSchema)) body: z.output<typeof updateOrderItemsStatusSchema>,
+  ): Promise<OwnerOrder> {
+    return this.orders.updateItems(auth.userId, id, body);
+  }
+
+  @RequirePermission('orders.update')
+  @Patch(':id/priority')
+  @RateLimit({ name: 'order-status:ip', limit: 600, windowSeconds: 60, by: 'ip' })
+  setPriority(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', new ZodValidationPipe(orderIdParamSchema)) id: string,
+    @Body(new ZodValidationPipe(updateOrderPrioritySchema)) body: z.output<typeof updateOrderPrioritySchema>,
+  ): Promise<OwnerOrder> {
+    return this.orders.setPriority(auth.userId, id, body.priority);
+  }
+
+  /** Who moved each dish, and when. */
+  @Get(':id/kitchen-history')
+  @Header('Cache-Control', 'no-store')
+  kitchenHistory(@CurrentAuth() auth: AuthContext, @Param('id', new ZodValidationPipe(orderIdParamSchema)) id: string): Promise<OrderItemEvent[]> {
+    return this.orders.itemHistory(auth.userId, id);
+  }
+
+  /** payments.process to mark paid; payments.refund to mark a paid bill unpaid again. */
   @Patch(':id/payment')
-  @RequireRole('OWNER', 'MANAGER')
+  @RequireAnyPermission('payments.process', 'payments.refund')
   @RateLimit({ name: 'order-status:ip', limit: 600, windowSeconds: 60, by: 'ip' })
   updatePayment(
     @CurrentAuth() auth: AuthContext,

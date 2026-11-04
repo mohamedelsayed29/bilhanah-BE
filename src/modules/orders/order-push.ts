@@ -12,6 +12,9 @@ export type OrderPushInput = {
   language: Language;
   /** The order's tracking page. */
   url: string;
+  /** When the restaurant expects it ready, for the accepted and preparing updates. */
+  estimatedReadyAt?: Date | null;
+  timezone?: string;
   icon: string | null;
 };
 
@@ -34,6 +37,17 @@ export function orderPushPayload(input: OrderPushInput): OrderPushPayload {
     case 'CANCELLED':
       body = (ar ? `طلبك رقم ${number} اتلغى.` : `Order #${number} was cancelled.`) + reason;
       break;
+    case 'ACCEPTED':
+    case 'PREPARING': {
+      const step = input.status === 'ACCEPTED'
+        ? ar ? `المطعم أكّد طلبك رقم ${number}.` : `Order #${number} is confirmed.`
+        : ar ? `طلبك رقم ${number} بيتحضّر دلوقتي.` : `Order #${number} is being prepared.`;
+      const at = input.estimatedReadyAt
+        ? new Intl.DateTimeFormat(ar ? 'ar-EG' : 'en-US', { hour: 'numeric', minute: '2-digit', timeZone: input.timezone ?? 'Africa/Cairo' }).format(input.estimatedReadyAt)
+        : null;
+      body = at ? step + (ar ? ` متوقع يجهز حوالي ${at}.` : ` Expected ready around ${at}.`) : step;
+      break;
+    }
     default:
       body = ar ? `فيه تحديث على طلبك رقم ${number}.` : `Order #${number} has an update.`;
   }

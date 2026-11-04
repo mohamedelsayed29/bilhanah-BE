@@ -1,21 +1,23 @@
 import { ForbiddenException, Global, Injectable, Module, NotFoundException } from '@nestjs/common';
-import { BRANCH_ERROR_CODES, RESTAURANT_ERROR_CODES, type UserRole } from '@bilhanah/contracts';
+import { BRANCH_ERROR_CODES, COMMON_ERROR_CODES, effectivePermissions, type Permission, RESTAURANT_ERROR_CODES, type RestaurantRole } from '@bilhanah/contracts';
 import type { Branch, Prisma, RestaurantStatus } from '@bilhanah/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 
 /** Roles that work inside a restaurant. */
-export type RestaurantRole = Extract<UserRole, 'OWNER' | 'KITCHEN' | 'MANAGER'>;
+export type { RestaurantRole };
 
 /** Who is calling, which restaurant they belong to, and which branches they may see. */
 export type Scope = {
   userId: string;
   role: RestaurantRole;
-  restaurant: { id: string; name: string; subdomain: string; timezone: string; status: RestaurantStatus };
+  /** What the caller may do (role defaults and grants), read fresh on each request. */
+  permissions: ReadonlySet<Permission>;
+  restaurant: { id: string; name: string; subdomain: string; timezone: string; status: RestaurantStatus; orderPrepMinutes: number | null };
   /** A staff account tied to one branch; null for owners and all-branch staff. */
   fixedBranchId: string | null;
 };
 
-const restaurantSelect = { id: true, name: true, subdomain: true, timezone: true, status: true } satisfies Prisma.RestaurantSelect;
+const restaurantSelect = { id: true, name: true, subdomain: true, timezone: true, status: true, orderPrepMinutes: true } satisfies Prisma.RestaurantSelect;
 
 export const restaurantNotFound = () =>
   new NotFoundException({ code: RESTAURANT_ERROR_CODES.RESTAURANT_NOT_FOUND, message: 'Restaurant not found.' });
@@ -41,6 +43,7 @@ export class BranchScopeService {
       select: {
         role: true,
         staffBranchId: true,
+        permissionGrants: true,
         restaurant: { select: restaurantSelect },
         staffRestaurant: { select: restaurantSelect },
       },
@@ -48,7 +51,20 @@ export class BranchScopeService {
     if (!user || user.role === 'ADMIN') throw restaurantNotFound();
     const restaurant = user.role === 'OWNER' ? user.restaurant : user.staffRestaurant;
     if (!restaurant) throw restaurantNotFound();
-    return { userId, role: user.role, restaurant, fixedBranchId: user.role === 'OWNER' ? null : user.staffBranchId };
+    return {
+      userId,
+      role: user.role,
+      permissions: new Set(effectivePermissions(user.role, user.permissionGrants)),
+      restaurant,
+      fixedBranchId: user.role === 'OWNER' ? null : user.staffBranchId,
+    };
+  }
+
+  /** Refuses (403) a caller without every one of the permissions. */
+  require(scope: Scope, ...permissions: Permission[]): void {
+    if (!permissions.every((permission) => scope.permissions.has(permission))) {
+      throw new ForbiddenException({ code: COMMON_ERROR_CODES.FORBIDDEN, message: 'You do not have permission to do this.' });
+    }
   }
 
   /** A filter for rows with a branchId: the requested branch (checked), the caller's own, or every branch. */

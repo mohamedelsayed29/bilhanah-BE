@@ -360,6 +360,7 @@ describe('public menu', () => {
     expect(response.body).toEqual({
       restaurant: { availability: 'TEMPORARILY_UNAVAILABLE', subdomain: 'koshary', name: 'Koshary Abou Tarek', defaultLanguage: 'ar' },
       categories: [],
+      recommendations: [],
     });
     // The owner can still prepare the menu.
     await category(token, 'حلويات');

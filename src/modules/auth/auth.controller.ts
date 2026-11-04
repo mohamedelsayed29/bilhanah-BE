@@ -37,7 +37,11 @@ import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.
 import { TrustedOriginGuard } from '../../common/guards/trusted-origin.guard.js';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
 import type { Env } from '../../config/env.schema.js';
-import { REFRESH_COOKIE, refreshCookieOptions } from './auth-cookies.js';
+import { ADMIN_REFRESH_COOKIE, REFRESH_COOKIE, refreshCookieOptions } from './auth-cookies.js';
+import { AdminOriginGuard } from '../../common/guards/admin-origin.guard.js';
+
+/** The admin cookie only travels to the admin session routes. */
+const ADMIN_COOKIE_PATH = '/v1/auth/admin';
 import { AuthService, type IssuedSession } from './auth.service.js';
 
 const HOUR = 60 * 60;
@@ -107,7 +111,7 @@ export class AuthController {
   @Post('admin/login')
   @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
-  @UseGuards(TrustedOriginGuard)
+  @UseGuards(AdminOriginGuard)
   @RateLimit(
     { name: 'admin-login:ip', limit: 20, windowSeconds: HOUR, by: 'ip' },
     { name: 'admin-login:email', limit: 5, windowSeconds: 15 * 60, by: 'email' },
@@ -118,7 +122,26 @@ export class AuthController {
     @Res({ passthrough: true }) response: Response,
   ): Promise<SessionResponse> {
     const issued = await this.auth.adminLogin(body, { ipAddress: request.ip, userAgent: request.headers['user-agent'] });
-    return this.withRefreshCookie(response, issued);
+    return this.withAdminCookie(response, issued);
+  }
+
+  /** The admin console's own refresh: only administrator sessions, from its own cookie. */
+  @Post('admin/refresh')
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(AdminOriginGuard)
+  @RateLimit({ name: 'refresh:ip', limit: 60, windowSeconds: 60, by: 'ip' })
+  async adminRefresh(@Req() request: Request, @Res({ passthrough: true }) response: Response): Promise<SessionResponse> {
+    const issued = await this.auth.refresh(request.cookies?.[ADMIN_REFRESH_COOKIE], 'admin');
+    return this.withAdminCookie(response, issued);
+  }
+
+  @Post('admin/logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(AdminOriginGuard)
+  async adminLogout(@Req() request: Request, @Res({ passthrough: true }) response: Response): Promise<void> {
+    await this.auth.logout(request.cookies?.[ADMIN_REFRESH_COOKIE]);
+    response.clearCookie(ADMIN_REFRESH_COOKIE, refreshCookieOptions(this.secureCookies, undefined, ADMIN_COOKIE_PATH));
   }
 
   @Post('refresh')
@@ -127,7 +150,8 @@ export class AuthController {
   @UseGuards(TrustedOriginGuard)
   @RateLimit({ name: 'refresh:ip', limit: 60, windowSeconds: 60, by: 'ip' })
   async refresh(@Req() request: Request, @Res({ passthrough: true }) response: Response): Promise<SessionResponse> {
-    const issued = await this.auth.refresh(request.cookies?.[REFRESH_COOKIE]);
+    // Restaurant dashboards never carry an administrator session.
+    const issued = await this.auth.refresh(request.cookies?.[REFRESH_COOKIE], 'restaurant');
     return this.withRefreshCookie(response, issued);
   }
 
@@ -198,6 +222,11 @@ export class AuthController {
     @Body(new ZodValidationPipe(changePasswordSchema)) body: z.output<typeof changePasswordSchema>,
   ): Promise<void> {
     await this.auth.changePassword(auth, body);
+  }
+
+  private withAdminCookie(response: Response, issued: IssuedSession): SessionResponse {
+    response.cookie(ADMIN_REFRESH_COOKIE, issued.refreshToken, refreshCookieOptions(this.secureCookies, issued.refreshTokenMaxAgeMs, ADMIN_COOKIE_PATH));
+    return issued.response;
   }
 
   private withRefreshCookie(response: Response, issued: IssuedSession): SessionResponse {

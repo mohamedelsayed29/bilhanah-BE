@@ -5,8 +5,17 @@ import {
   normalizeSubdomain,
   ORDER_ERROR_CODES,
   ORDER_TRANSITIONS,
+  ORDER_STATUS_PERMISSION as STATUS_PERMISSION,
+  KITCHEN_DISPLAY_ERROR_CODES,
+  ORDER_ITEM_STATUS_PERMISSION,
+  ORDER_ITEM_TRANSITIONS,
+  type OrderItemEvent,
+  type OrderItemStatus,
+  type OrderPriority,
+  type updateOrderItemsStatusSchema,
   type OrderStatus,
   type OpeningHours,
+  type OrderTrackingStats,
   type OwnerOrder,
   type Paginated,
   type placeOrderSchema,
@@ -14,8 +23,11 @@ import {
   type PublicOrder,
   RESTAURANT_ERROR_CODES,
   TABLE_OCCUPANCY_HOURS,
+  TABLE_RESERVED_WINDOW,
+  UPCOMING_RESERVATION_STATUSES,
   type TableOccupancy,
   type ordersQuerySchema,
+  type trackingStatsQuerySchema,
   type updateOrderStatusSchema,
 } from '@bilhanah/contracts';
 import { Prisma } from '@bilhanah/database';
@@ -26,6 +38,9 @@ import { MediaService } from '../media/media.service.js';
 import { effectiveItem } from '../branches/branch-menu.js';
 import { BranchScopeService, branchNotFound } from '../branches/branch-scope.service.js';
 import { MenusService } from '../menus/menus.service.js';
+import { RecommendationsService } from '../recommendations/recommendations.service.js';
+import { KitchenStationsService } from '../kitchen-display/kitchen-stations.service.js';
+import { forwardSteps, itemCascade, itemTimestamps, orderTargetFromItems } from './order-items.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { hasAccess } from '../subscriptions/access.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
@@ -37,6 +52,7 @@ const orderInclude = {
   items: { orderBy: { sortOrder: 'asc' } },
   restaurant: { select: { name: true, subdomain: true, phone: true, brandColor: true, logo: true } },
   branch: { select: { id: true, name: true, slug: true, phone: true, city: true, address: true, mapUrl: true, isMain: true } },
+  statusEvents: { orderBy: { createdAt: 'asc' }, select: { status: true, createdAt: true, reason: true, actorName: true } },
   _count: { select: { pushSubscriptions: true } },
 } satisfies Prisma.OrderInclude;
 
@@ -73,6 +89,8 @@ export class OrdersService {
     private readonly alerts: OrderAlertsService,
     private readonly scopes: BranchScopeService,
     private readonly menus: MenusService,
+    private readonly recommendations: RecommendationsService,
+    private readonly stations: KitchenStationsService,
   ) {}
 
   // --- Diners --------------------------------------------------------------
@@ -151,6 +169,7 @@ export class OrdersService {
             idempotencyKey,
             placedAt: now,
             items: { create: lines.map((line, sortOrder) => ({ ...line, sortOrder })) },
+            statusEvents: { create: { status: 'PLACED', createdAt: now } },
           },
           include: orderInclude,
         });
@@ -174,6 +193,8 @@ export class OrdersService {
     const orderId = this.trackingTokens.verify(token);
     const order = orderId ? await this.prisma.order.findUnique({ where: { id: orderId }, include: orderInclude }) : null;
     if (!order) throw orderNotFound();
+    // Tracking usage: the first time the diner opens the page. Never fails the page.
+    if (!order.trackedAt) void this.prisma.order.updateMany({ where: { id: order.id, trackedAt: null }, data: { trackedAt: new Date() } }).catch(() => undefined);
     return this.toPublicOrder(order);
   }
 
@@ -208,9 +229,14 @@ export class OrdersService {
 
   /** Moves an order along; only the transitions in ORDER_TRANSITIONS are allowed. */
   async updateStatus(userId: string, orderId: string, input: z.output<typeof updateOrderStatusSchema>): Promise<OwnerOrder> {
-    const own = await this.ownWhere(userId);
+    const scope = await this.scopes.resolve(userId);
+    this.scopes.require(scope, STATUS_PERMISSION[input.status]);
+    const own = await this.scopes.branchWhere(scope);
     const restaurantId = own.restaurantId;
-    const current = await this.prisma.order.findFirst({ where: { id: orderId, ...own }, select: { status: true } });
+    const current = await this.prisma.order.findFirst({
+      where: { id: orderId, ...own },
+      select: { status: true, restaurant: { select: { orderPrepMinutes: true } } },
+    });
     if (!current) throw orderNotFound();
     const allowed = ORDER_TRANSITIONS[current.status];
     if (!allowed.includes(input.status)) {
@@ -224,14 +250,28 @@ export class OrdersService {
     const now = new Date();
     const timestamp = STATUS_TIMESTAMP[input.status];
     const closing = input.status === 'REJECTED' || input.status === 'CANCELLED';
+    // Accepting uses the restaurant's usual time unless the staff gave one; preparing may revise it.
+    const prepMinutes = input.prepMinutes ?? (input.status === 'ACCEPTED' ? current.restaurant.orderPrepMinutes : null);
+    const actor = await this.prisma.user.findUnique({ where: { id: userId }, select: { fullName: true } });
     // Compare-and-swap on the status, so two devices cannot both move the same order.
-    const changed = await this.prisma.order.updateMany({
-      where: { id: orderId, restaurantId, status: current.status },
-      data: {
-        status: input.status,
-        ...(timestamp && { [timestamp]: now }),
-        ...(closing && { rejectionReason: input.reason ?? null }),
-      },
+    const changed = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.order.updateMany({
+        where: { id: orderId, restaurantId, status: current.status },
+        data: {
+          status: input.status,
+          ...(timestamp && { [timestamp]: now }),
+          ...(closing && { rejectionReason: input.reason ?? null }),
+          ...(prepMinutes && { estimatedReadyAt: new Date(now.getTime() + prepMinutes * 60_000) }),
+        },
+      });
+      if (result.count === 1) {
+        await tx.orderStatusEvent.create({
+          data: { orderId, status: input.status, actorId: userId, actorName: actor?.fullName ?? null, reason: closing ? (input.reason ?? null) : null, createdAt: now },
+        });
+        // The dishes follow the order (accepting accepts them, ready makes them ready...).
+        await this.cascadeItems(tx, orderId, input.status, { id: userId, name: actor?.fullName ?? null }, now);
+      }
+      return result;
     });
     if (changed.count !== 1) {
       throw new ConflictException({
@@ -248,9 +288,187 @@ export class OrdersService {
     return ownerView;
   }
 
+  // --- Kitchen display ---------------------------------------------------------
+
+  /**
+   * Moves dishes of one order to a step (a station bumping its part, or one dish). Dishes already
+   * there are left alone, so a repeated request changes nothing; any other dish must be allowed to
+   * make the move. The order then follows its dishes (see orderTargetFromItems), and everyone's
+   * screens and the diner hear about it once.
+   */
+  async updateItems(userId: string, orderId: string, input: z.output<typeof updateOrderItemsStatusSchema>, now = new Date()): Promise<OwnerOrder> {
+    const scope = await this.scopes.resolve(userId);
+    this.scopes.require(scope, ORDER_ITEM_STATUS_PERMISSION[input.status]);
+    const own = await this.scopes.branchWhere(scope);
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, ...own },
+      select: { status: true, restaurantId: true, restaurant: { select: { kitchenReadyRule: true, orderPrepMinutes: true } }, items: { select: { id: true, prepStatus: true } } },
+    });
+    if (!order) throw orderNotFound();
+    const invalid = (itemId: string, from: OrderItemStatus | null, message: string) => new ConflictException({
+      code: KITCHEN_DISPLAY_ERROR_CODES.INVALID_ITEM_STATUS_CHANGE,
+      message,
+      details: { itemId, from, to: input.status, allowed: from ? ORDER_ITEM_TRANSITIONS[from] : [] },
+    });
+    if (!ACTIVE_ORDER_STATUSES.includes(order.status as (typeof ACTIVE_ORDER_STATUSES)[number])) {
+      throw invalid(input.itemIds[0]!, null, 'This order is closed.');
+    }
+    const changes: { id: string; from: OrderItemStatus }[] = [];
+    for (const itemId of input.itemIds) {
+      const item = order.items.find((entry) => entry.id === itemId);
+      if (!item) throw new NotFoundException({ code: KITCHEN_DISPLAY_ERROR_CODES.ORDER_ITEM_NOT_FOUND, message: 'This dish is not part of the order.' });
+      if (item.prepStatus === input.status) continue;
+      if (!ORDER_ITEM_TRANSITIONS[item.prepStatus].includes(input.status)) {
+        throw invalid(itemId, item.prepStatus, `A ${item.prepStatus.toLowerCase()} dish cannot become ${input.status.toLowerCase()}.`);
+      }
+      // A dish goes back to the stove only while the order is not out yet.
+      if (item.prepStatus === 'READY' && input.status === 'PREPARING' && order.status === 'READY') {
+        throw invalid(itemId, item.prepStatus, 'The order is already ready; it cannot take a dish back.');
+      }
+      changes.push({ id: itemId, from: item.prepStatus });
+    }
+    if (!changes.length) return this.get(userId, orderId);
+
+    const actor = await this.prisma.user.findUnique({ where: { id: userId }, select: { fullName: true } });
+    const steps = await this.prisma.$transaction(async (tx) => {
+      for (const change of changes) {
+        // Compare-and-swap per dish: two screens cannot both move it.
+        const moved = await tx.orderItem.updateMany({
+          where: { id: change.id, orderId, prepStatus: change.from },
+          data: { prepStatus: input.status, ...itemTimestamps(input.status, now, change.from), ...(input.status === 'PREPARING' && change.from === 'NEW' && { acceptedAt: now }) },
+        });
+        if (moved.count !== 1) throw invalid(change.id, change.from, 'This dish was just updated on another screen.');
+      }
+      await tx.orderItemEvent.createMany({
+        data: changes.map((change) => ({ orderId, orderItemId: change.id, status: input.status, actorId: userId, actorName: actor?.fullName ?? null, createdAt: now })),
+      });
+      const items = await tx.orderItem.findMany({ where: { orderId }, select: { prepStatus: true } });
+      const target = orderTargetFromItems(items.map((item) => item.prepStatus), order.restaurant.kitchenReadyRule, order.status);
+      const path = forwardSteps(order.status, target);
+      let previous = order.status;
+      for (const step of path) {
+        const timestamp = STATUS_TIMESTAMP[step];
+        const prepMinutes = step === 'ACCEPTED' ? order.restaurant.orderPrepMinutes : null;
+        const result = await tx.order.updateMany({
+          where: { id: orderId, status: previous },
+          data: { status: step, ...(timestamp && { [timestamp]: now }), ...(prepMinutes && { estimatedReadyAt: new Date(now.getTime() + prepMinutes * 60_000) }) },
+        });
+        if (result.count !== 1) throw invalid(changes[0]!.id, changes[0]!.from, 'This order was just updated on another screen.');
+        await tx.orderStatusEvent.create({ data: { orderId, status: step, actorId: userId, actorName: actor?.fullName ?? null, createdAt: now } });
+        previous = step;
+      }
+      // Serving the last dishes completes the order: anything still waiting is served with it.
+      if (previous === 'COMPLETED') await this.cascadeItems(tx, orderId, 'COMPLETED', { id: userId, name: actor?.fullName ?? null }, now);
+      return path;
+    });
+
+    const full = await this.prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: orderInclude });
+    const ownerView = this.toOwnerOrder(full);
+    this.realtime.emitOrderUpdated(order.restaurantId, ownerView, this.toPublicOrder(full));
+    for (const step of steps) await this.alerts.queueStatus(orderId, step);
+    return ownerView;
+  }
+
+  /** Rush orders go first on every kitchen screen. */
+  async setPriority(userId: string, orderId: string, priority: OrderPriority): Promise<OwnerOrder> {
+    const scope = await this.scopes.resolve(userId);
+    this.scopes.require(scope, 'orders.update');
+    const own = await this.scopes.branchWhere(scope);
+    const updated = await this.prisma.order.updateMany({ where: { id: orderId, ...own }, data: { priority } });
+    if (!updated.count) throw orderNotFound();
+    const order = await this.prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: orderInclude });
+    const ownerView = this.toOwnerOrder(order);
+    this.realtime.emitOrderUpdated(order.restaurantId, ownerView, this.toPublicOrder(order));
+    return ownerView;
+  }
+
+  /** Every preparation step of the order's dishes, oldest first. */
+  async itemHistory(userId: string, orderId: string): Promise<OrderItemEvent[]> {
+    const own = await this.ownWhere(userId);
+    const order = await this.prisma.order.findFirst({ where: { id: orderId, ...own }, select: { id: true } });
+    if (!order) throw orderNotFound();
+    const events = await this.prisma.orderItemEvent.findMany({ where: { orderId }, orderBy: { createdAt: 'asc' } });
+    return events.map((event) => ({ itemId: event.orderItemId, status: event.status, actorName: event.actorName, at: event.createdAt.toISOString() }));
+  }
+
+  /** Moves the dishes along with an order's own status change, recording each move. */
+  private async cascadeItems(tx: Prisma.TransactionClient, orderId: string, status: OrderStatus, actor: { id: string; name: string | null }, now: Date): Promise<void> {
+    const cascade = itemCascade(status);
+    if (!cascade) return;
+    const items = await tx.orderItem.findMany({ where: { orderId, prepStatus: { in: cascade.from } }, select: { id: true, prepStatus: true } });
+    if (!items.length) return;
+    for (const from of new Set(items.map((item) => item.prepStatus))) {
+      await tx.orderItem.updateMany({
+        where: { orderId, prepStatus: from },
+        data: {
+          prepStatus: cascade.to,
+          ...itemTimestamps(cascade.to, now, from),
+          // Skipped steps still get a time, so preparation times stay measurable.
+          ...(from === 'NEW' && cascade.to !== 'CANCELLED' && cascade.to !== 'ACCEPTED' && { acceptedAt: now }),
+        },
+      });
+    }
+    await tx.orderItemEvent.createMany({
+      data: items.map((item) => ({ orderId, orderItemId: item.id, status: cascade.to, actorId: actor.id, actorName: actor.name, createdAt: now })),
+    });
+  }
+
+  /** How diners followed their orders over the period (see OrderTrackingStats). */
+  async trackingStats(userId: string, query: z.output<typeof trackingStatsQuerySchema>, now = new Date()): Promise<OrderTrackingStats> {
+    const scope = await this.scopes.resolve(userId);
+    const where = await this.scopes.branchWhere(scope, query.branchId);
+    const since = new Date(now.getTime() - query.days * 86_400_000);
+    const branch = where.branchId ? Prisma.sql`AND o.branch_id = ${where.branchId}::uuid` : Prisma.empty;
+    const [row] = await this.prisma.$queryRaw<{
+      orders: bigint; tracked: bigint; alertOrders: bigint; notified: bigint; estimated: bigint; onTime: bigint;
+    }[]>`
+      SELECT COUNT(*) AS orders,
+        COUNT(*) FILTER (WHERE o.tracked_at IS NOT NULL) AS tracked,
+        COUNT(*) FILTER (WHERE o.ready_at IS NOT NULL AND EXISTS (SELECT 1 FROM push_subscriptions p WHERE p.order_id = o.id) OR o.ready_notified_at IS NOT NULL) AS "alertOrders",
+        COUNT(*) FILTER (WHERE o.ready_notified_at IS NOT NULL) AS notified,
+        COUNT(*) FILTER (WHERE o.estimated_ready_at IS NOT NULL AND o.ready_at IS NOT NULL) AS estimated,
+        COUNT(*) FILTER (WHERE o.estimated_ready_at IS NOT NULL AND o.ready_at <= o.estimated_ready_at) AS "onTime"
+      FROM orders o
+      WHERE o.restaurant_id = ${where.restaurantId}::uuid ${branch} AND o.placed_at >= ${since}
+        AND o.status NOT IN ('REJECTED', 'CANCELLED')`;
+    // A service request from a table that had an order on its way at that moment.
+    const [enquiries] = await this.prisma.$queryRaw<{ count: bigint }[]>`
+      SELECT COUNT(*) AS count FROM service_requests s
+      WHERE s.restaurant_id = ${where.restaurantId}::uuid ${where.branchId ? Prisma.sql`AND s.branch_id = ${where.branchId}::uuid` : Prisma.empty}
+        AND s.created_at >= ${since} AND s.table_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM orders o WHERE o.table_id = s.table_id AND o.placed_at <= s.created_at
+            AND COALESCE(o.ready_at, o.closed_at, o.completed_at, 'infinity'::timestamptz) > s.created_at
+        )`;
+    const count = (value: bigint | undefined) => Number(value ?? 0);
+    const rate = (part: number, whole: number) => (whole ? part / whole : null);
+    const orders = count(row?.orders);
+    const tracked = count(row?.tracked);
+    const readyAlertOrders = count(row?.alertOrders);
+    const readyNotified = count(row?.notified);
+    const estimatedOrders = count(row?.estimated);
+    const readyOnTime = count(row?.onTime);
+    return {
+      days: query.days,
+      orders,
+      tracked,
+      trackingRate: rate(tracked, orders),
+      readyAlertOrders,
+      readyNotified,
+      readyDeliveryRate: rate(readyNotified, readyAlertOrders),
+      estimatedOrders,
+      readyOnTime,
+      onTimeRate: rate(readyOnTime, estimatedOrders),
+      statusEnquiries: count(enquiries?.count),
+    };
+  }
+
   /** Marks the bill paid or, to undo a mistake, unpaid. */
   async setPaid(userId: string, orderId: string, paid: boolean): Promise<OwnerOrder> {
-    const own = await this.ownWhere(userId);
+    const scope = await this.scopes.resolve(userId);
+    // Marking a paid bill unpaid again reverses a payment: a refund.
+    this.scopes.require(scope, paid ? 'payments.process' : 'payments.refund');
+    const own = await this.scopes.branchWhere(scope);
     const restaurantId = own.restaurantId;
     const current = await this.prisma.order.findFirst({ where: { id: orderId, ...own }, select: { status: true, paidAt: true } });
     if (!current) throw orderNotFound();
@@ -269,15 +487,30 @@ export class OrdersService {
   async floor(userId: string, branchId?: string, now = new Date()): Promise<TableOccupancy[]> {
     const scope = await this.scopes.resolve(userId);
     const branch = await this.scopes.branch(scope, branchId);
-    const [tables, open] = await Promise.all([
-      this.prisma.table.findMany({ where: { branchId: branch.id, isActive: true }, orderBy: { sortOrder: 'asc' }, select: { id: true, label: true, shape: true, seats: true } }),
+    const [tables, open, bookings] = await Promise.all([
+      this.prisma.table.findMany({ where: { branchId: branch.id, isActive: true }, orderBy: { sortOrder: 'asc' }, select: { id: true, label: true, shape: true, seats: true, location: true, areaId: true } }),
       this.prisma.order.findMany({
         where: this.openOnTableWhere(branch.id, now),
         orderBy: { placedAt: 'asc' },
         select: { id: true, number: true, status: true, subtotalPiastres: true, placedAt: true, tableId: true, tableLabel: true },
       }),
+      // Bookings holding a table now: from TABLE_RESERVED_WINDOW.beforeMinutes before their time until afterMinutes after.
+      this.prisma.reservation.findMany({
+        where: {
+          branchId: branch.id,
+          tableId: { not: null },
+          status: { in: [...UPCOMING_RESERVATION_STATUSES] },
+          reservedAt: {
+            gte: new Date(now.getTime() - TABLE_RESERVED_WINDOW.afterMinutes * 60_000),
+            lte: new Date(now.getTime() + TABLE_RESERVED_WINDOW.beforeMinutes * 60_000),
+          },
+        },
+        orderBy: { reservedAt: 'asc' },
+        select: { id: true, tableId: true, customerName: true, reservedAt: true, guests: true },
+      }),
     ]);
     return tables.map((table) => {
+      const booking = bookings.find((entry) => entry.tableId === table.id);
       // Orders typed in by hand ("Table 5") carry only the label.
       const orders = open.filter((order) => (order.tableId ? order.tableId === table.id : order.tableLabel === table.label));
       return {
@@ -285,7 +518,12 @@ export class OrdersService {
         label: table.label,
         shape: table.shape,
         seats: table.seats,
+        location: table.location,
+        areaId: table.areaId,
         occupied: orders.length > 0,
+        reservation: booking && orders.length === 0
+          ? { id: booking.id, customerName: booking.customerName, reservedAt: booking.reservedAt.toISOString(), guests: booking.guests }
+          : null,
         openOrders: orders.map((order) => ({
           id: order.id,
           number: order.number,
@@ -315,6 +553,8 @@ export class OrdersService {
       const orders = await this.prisma.order.findMany({ where: { id: { in: ids } }, include: orderInclude });
       for (const order of orders) this.realtime.emitOrderUpdated(restaurantId, this.toOwnerOrder(order), this.toPublicOrder(order));
     }
+    // The guests have left: their table session (and its service requests' context) ends with the bill.
+    await this.prisma.tableSession.updateMany({ where: { tableId: table.id, endedAt: null }, data: { endedAt: now } });
     return this.floor(userId, table.branchId, now);
   }
 
@@ -337,10 +577,12 @@ export class OrdersService {
           isVisible: true,
           category: { isVisible: true },
         },
-        include: { variants: true },
+        include: { variants: true, category: { select: { stationId: true } } },
       }),
       this.menus.branchOverrides(branchId),
     ]);
+    // Each dish goes to its kitchen station (its own, its category's, or the default).
+    const route = await this.stations.router(restaurantId);
     const byId = new Map(
       menuItems.flatMap((item) => {
         const effective = effectiveItem(item, overrides);
@@ -366,6 +608,8 @@ export class OrdersService {
           unitPricePiastres: variant.pricePiastres,
           quantity: line.quantity,
           note: line.note ?? null,
+          stationId: route(menuItem)?.id ?? null,
+          stationName: route(menuItem)?.name ?? null,
         },
       ];
     });
@@ -376,7 +620,9 @@ export class OrdersService {
         details: { menuItemIds: [...unavailable] },
       });
     }
-    return lines;
+    // Lines added from a suggestion keep it when it checks out (for conversion and revenue); otherwise it is dropped.
+    const attribution = await this.recommendations.attribute(restaurantId, items);
+    return lines.map((line, index) => ({ ...line, ...(attribution[index] ?? {}) }));
   }
 
   /** Dine-in orders still on the bill: unpaid, not rejected or cancelled, and recent enough to count. */
@@ -419,6 +665,11 @@ export class OrdersService {
         quantity: item.quantity,
         note: item.note,
         lineTotalPiastres: item.unitPricePiastres * item.quantity,
+        stationId: item.stationId,
+        stationName: item.stationName,
+        prepStatus: item.prepStatus,
+        startedAt: item.startedAt?.toISOString() ?? null,
+        readyAt: item.readyAt?.toISOString() ?? null,
       })),
       placedAt: order.placedAt.toISOString(),
       acceptedAt: order.acceptedAt?.toISOString() ?? null,
@@ -427,6 +678,8 @@ export class OrdersService {
       closedAt: order.closedAt?.toISOString() ?? null,
       rejectionReason: order.rejectionReason,
       paidAt: order.paidAt?.toISOString() ?? null,
+      estimatedReadyAt: order.estimatedReadyAt?.toISOString() ?? null,
+      history: order.statusEvents.map((event) => ({ status: event.status, at: event.createdAt.toISOString(), reason: event.reason })),
       updatedAt: order.updatedAt.toISOString(),
     };
   }
@@ -438,7 +691,9 @@ export class OrdersService {
       branchName: order.branch.name,
       customerPhone: order.customerPhone,
       notifiesDiner: order._count.pushSubscriptions > 0,
+      priority: order.priority,
       ...this.core(order),
+      history: order.statusEvents.map((event) => ({ status: event.status, at: event.createdAt.toISOString(), reason: event.reason, actorName: event.actorName })),
     };
   }
 

@@ -51,7 +51,8 @@ export class PushProcessor implements OnApplicationBootstrap, OnApplicationShutd
             number: true,
             type: true,
             rejectionReason: true,
-            restaurant: { select: { name: true, subdomain: true, logo: true, _count: { select: { branches: { where: { isActive: true } } } } } },
+            estimatedReadyAt: true,
+            restaurant: { select: { name: true, subdomain: true, logo: true, timezone: true, _count: { select: { branches: { where: { isActive: true } } } } } },
             branch: { select: { name: true } },
           },
         },
@@ -73,9 +74,13 @@ export class PushProcessor implements OnApplicationBootstrap, OnApplicationShutd
       language: subscription.language,
       url: `${this.urlTemplate.replace('{subdomain}', order.restaurant.subdomain)}/order/${this.trackingTokens.issue(order.id)}`,
       icon: logo?.sources[0]?.url ?? null,
+      estimatedReadyAt: order.estimatedReadyAt,
+      timezone: order.restaurant.timezone,
     });
 
     const outcome = await this.push.send(subscription, JSON.stringify(payload), { topic: orderPushTopic(order.id), ttlSeconds: PUSH_TTL_SECONDS });
+    // Ready-notification delivery: at least one of the diner's browsers took it.
+    if (outcome === 'delivered' && status === 'READY') await this.prisma.order.updateMany({ where: { id: order.id, readyNotifiedAt: null }, data: { readyNotifiedAt: new Date() } });
     if (outcome === 'gone') await this.prisma.pushSubscription.deleteMany({ where: { id: subscriptionId } });
     if (outcome === 'rejected') this.logger.warn({ subscriptionId, status }, 'The push service refused an order notification');
     return outcome;

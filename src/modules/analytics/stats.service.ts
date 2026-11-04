@@ -31,7 +31,12 @@ export class StatsService {
   /** The whole restaurant, or one branch's orders (managers always get their branch). Visits are restaurant-wide. */
   async restaurant(userId: string, days: number, requestedBranchId?: string, now = new Date()): Promise<RestaurantStats> {
     const scope = await this.scopes.resolve(userId);
-    if (scope.role === 'KITCHEN') throw new ForbiddenException({ code: COMMON_ERROR_CODES.FORBIDDEN, message: 'You do not have permission to do this.' });
+    if (!scope.permissions.has('analytics.view') && !scope.permissions.has('dashboard.view')) {
+      throw new ForbiddenException({ code: COMMON_ERROR_CODES.FORBIDDEN, message: 'You do not have permission to do this.' });
+    }
+    // Revenue is only for those allowed to see the restaurant's finances.
+    const financial = scope.permissions.has('analytics.financial');
+    const money = (piastres: number) => (financial ? piastres : 0);
     const restaurant = scope.restaurant;
     const { branchId } = await this.scopes.branchWhere(scope, requestedBranchId);
     await this.visits.flush(now, restaurant.id);
@@ -61,7 +66,7 @@ export class StatsService {
     const series = dates.map((date) => {
       const key = dayKey(date);
       const orders = ordersByDay.get(key);
-      return { date: key, visits: visitsByDay.get(key)?.visits ?? 0, orders: orders?._count._all ?? 0, revenuePiastres: orders?._sum.subtotalPiastres ?? 0 };
+      return { date: key, visits: visitsByDay.get(key)?.visits ?? 0, orders: orders?._count._all ?? 0, revenuePiastres: money(orders?._sum.subtotalPiastres ?? 0) };
     });
     const totals = series.reduce((sum, day) => ({ visits: sum.visits + day.visits, orders: sum.orders + day.orders, revenuePiastres: sum.revenuePiastres + day.revenuePiastres }), { visits: 0, orders: 0, revenuePiastres: 0 });
     return {
@@ -72,16 +77,17 @@ export class StatsService {
         DINE_IN: typeRows.find((row) => row.type === 'DINE_IN')?._count._all ?? 0,
         PICKUP: typeRows.find((row) => row.type === 'PICKUP')?._count._all ?? 0,
       },
-      topItems: topItems.map((item) => ({ nameAr: item.nameAr, nameEn: item.nameEn, quantity: Number(item.quantity), revenuePiastres: Number(item.revenue) })),
+      topItems: topItems.map((item) => ({ nameAr: item.nameAr, nameEn: item.nameEn, quantity: Number(item.quantity), revenuePiastres: money(Number(item.revenue)) })),
       ordering: access.features.ordering,
       branchId: branchId ?? null,
+      financial,
     };
   }
 
   /** Every branch side by side over the period: orders, revenue, average ticket, prep time and order types. */
   async branches(userId: string, days: number, now = new Date()): Promise<BranchComparison> {
     const scope = await this.scopes.resolve(userId);
-    if (scope.role !== 'OWNER') throw new ForbiddenException({ code: COMMON_ERROR_CODES.FORBIDDEN, message: 'You do not have permission to do this.' });
+    if (!scope.permissions.has('analytics.financial')) throw new ForbiddenException({ code: COMMON_ERROR_CODES.FORBIDDEN, message: 'You do not have permission to do this.' });
     const dates = periodDays(days, scope.restaurant.timezone, now);
     const from = dates[0]!;
     const to = dates.at(-1)!;

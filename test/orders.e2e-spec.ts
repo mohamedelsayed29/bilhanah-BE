@@ -102,7 +102,7 @@ describe('placing orders', () => {
   it('only takes orders once the owner switches ordering on', async () => {
     const menu = await restaurantWithMenu();
     await http().patch('/v1/restaurants/mine').set(auth(menu.token)).send({ orderingEnabled: false }).expect(200);
-    expect((await http().get('/v1/public/restaurants/koshary').expect(200)).body.ordering).toEqual({ accepting: false, dineIn: true, pickup: true });
+    expect((await http().get('/v1/public/restaurants/koshary').expect(200)).body.ordering).toEqual({ accepting: false, dineIn: true, pickup: true, serviceRequests: true });
     const refused = await placeOrder(menu).expect(409);
     expect(refused.body.error.code).toBe('ORDERING_UNAVAILABLE');
 
@@ -263,6 +263,26 @@ describe('tables', () => {
     expect(floor.body.find((row: { id: string }) => row.id === round.body.id)).toMatchObject({ shape: 'ROUND', seats: 2 });
   });
 
+  it('keeps whether each table is indoor or outdoor', async () => {
+    const menu = await restaurantWithMenu();
+    const inside = await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'Hall 1' }).expect(201);
+    expect(inside.body).toMatchObject({ location: 'INDOOR' });
+    const terrace = await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'Terrace 1', location: 'OUTDOOR' }).expect(201);
+    expect(terrace.body).toMatchObject({ location: 'OUTDOOR' });
+    await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'Roof', location: 'ROOF' }).expect(400);
+
+    const range = await http().post('/v1/tables/range').set(auth(menu.token)).send({ from: 1, to: 2, prefix: 'Garden', location: 'OUTDOOR' }).expect(201);
+    expect(range.body.filter((row: { label: string }) => row.label.startsWith('Garden')).map((row: { location: string }) => row.location)).toEqual(['OUTDOOR', 'OUTDOOR']);
+
+    const moved = await http().patch(`/v1/tables/${inside.body.id}`).set(auth(menu.token)).send({ location: 'OUTDOOR' }).expect(200);
+    expect(moved.body).toMatchObject({ label: 'Hall 1', location: 'OUTDOOR' });
+    const listed = await http().get('/v1/tables').set(auth(menu.token)).expect(200);
+    expect(listed.body.find((row: { id: string }) => row.id === inside.body.id)).toMatchObject({ location: 'OUTDOOR' });
+
+    const floor = await http().get('/v1/orders/floor').set(auth(menu.token)).expect(200);
+    expect(floor.body.find((row: { id: string }) => row.id === terrace.body.id)).toMatchObject({ location: 'OUTDOOR' });
+  });
+
   it('creates tables with QR links and orders from a scanned table', async () => {
     const menu = await restaurantWithMenu();
     const table = await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'Table 1' }).expect(201);
@@ -296,6 +316,144 @@ describe('tables', () => {
     await http().patch(`/v1/tables/${table.body.id}`).set(auth(menu.token)).send({ isActive: false }).expect(200);
     await http().get(`/v1/public/restaurants/koshary/tables/${table.body.publicCode}`).expect(404);
     await http().get(`/v1/public/restaurants/other/tables/${table.body.publicCode}`).expect(404);
+  });
+});
+
+describe('table areas', () => {
+  const areas = (token: string) => http().get('/v1/table-areas').set(auth(token)).expect(200);
+
+  it('creates, edits and lists areas, and their tables take the area\'s location', async () => {
+    const menu = await restaurantWithMenu();
+    const hall = await http().post('/v1/table-areas').set(auth(menu.token)).send({ name: 'Main hall' }).expect(201);
+    expect(hall.body).toMatchObject({ name: 'Main hall', location: 'INDOOR', theme: 'HALL', tableCount: 0, activeOrders: 0 });
+    const garden = await http().post('/v1/table-areas').set(auth(menu.token)).send({ name: 'Garden', location: 'OUTDOOR' }).expect(201);
+    expect(garden.body.theme).toBe('TERRACE');
+    const roof = await http().post('/v1/table-areas').set(auth(menu.token)).send({ name: 'Roof', location: 'OUTDOOR', theme: 'ROOFTOP' }).expect(201);
+    expect(roof.body.theme).toBe('ROOFTOP');
+    expect((await http().patch(`/v1/table-areas/${garden.body.id}`).set(auth(menu.token)).send({ theme: 'GARDEN' }).expect(200)).body.theme).toBe('GARDEN');
+    await http().post('/v1/table-areas').set(auth(menu.token)).send({ name: 'Pool', theme: 'POOL' }).expect(400);
+    await http().delete(`/v1/table-areas/${roof.body.id}`).set(auth(menu.token)).expect(204);
+    expect((await http().post('/v1/table-areas').set(auth(menu.token)).send({ name: 'Garden' }).expect(409)).body.error.code).toBe('TABLE_AREA_NAME_TAKEN');
+    await http().post('/v1/table-areas').set(auth(menu.token)).send({ name: 'Moon', location: 'SPACE' }).expect(400);
+
+    // Assigned when created: one table, and a range.
+    const window = await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'Window', areaId: garden.body.id }).expect(201);
+    expect(window.body).toMatchObject({ areaId: garden.body.id, location: 'OUTDOOR' });
+    const range = await http().post('/v1/tables/range').set(auth(menu.token)).send({ from: 1, to: 2, prefix: 'Hall', areaId: hall.body.id, location: 'OUTDOOR' }).expect(201);
+    expect(range.body.filter((row: { label: string }) => row.label.startsWith('Hall')).map((row: { areaId: string; location: string }) => [row.areaId, row.location]))
+      .toEqual([[hall.body.id, 'INDOOR'], [hall.body.id, 'INDOOR']]);
+    const loose = await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'Loose' }).expect(201);
+    expect(loose.body.areaId).toBeNull();
+
+    // Moved between areas, and out of any area.
+    const moved = await http().patch(`/v1/tables/${window.body.id}`).set(auth(menu.token)).send({ areaId: hall.body.id }).expect(200);
+    expect(moved.body).toMatchObject({ areaId: hall.body.id, location: 'INDOOR' });
+    // While in an area, the table's own location follows the area.
+    expect((await http().patch(`/v1/tables/${window.body.id}`).set(auth(menu.token)).send({ location: 'OUTDOOR' }).expect(200)).body.location).toBe('INDOOR');
+    const out = await http().patch(`/v1/tables/${window.body.id}`).set(auth(menu.token)).send({ areaId: null, location: 'OUTDOOR' }).expect(200);
+    expect(out.body).toMatchObject({ areaId: null, location: 'OUTDOOR' });
+
+    // Renaming an area, and moving it outside moves its tables.
+    const rooftop = await http().patch(`/v1/table-areas/${hall.body.id}`).set(auth(menu.token)).send({ name: 'Rooftop', location: 'OUTDOOR' }).expect(200);
+    expect(rooftop.body).toMatchObject({ name: 'Rooftop', location: 'OUTDOOR', tableCount: 2 });
+    const tables = (await http().get('/v1/tables').set(auth(menu.token)).expect(200)).body as { label: string; location: string }[];
+    expect(tables.filter((row) => row.label.startsWith('Hall')).map((row) => row.location)).toEqual(['OUTDOOR', 'OUTDOOR']);
+    expect((await areas(menu.token)).body.map((row: { name: string; tableCount: number }) => [row.name, row.tableCount])).toEqual([['Rooftop', 2], ['Garden', 0]]);
+
+    const floor = await http().get('/v1/orders/floor').set(auth(menu.token)).expect(200);
+    expect(floor.body.find((row: { id: string }) => row.id === loose.body.id)).toMatchObject({ areaId: null });
+  });
+
+  it('refuses to delete an area with tables until they have somewhere to go', async () => {
+    const menu = await restaurantWithMenu();
+    const vip = await http().post('/v1/table-areas').set(auth(menu.token)).send({ name: 'VIP' }).expect(201);
+    const garden = await http().post('/v1/table-areas').set(auth(menu.token)).send({ name: 'Garden', location: 'OUTDOOR' }).expect(201);
+    const table = await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'VIP 1', areaId: vip.body.id }).expect(201);
+    await placeOrder(menu, { type: 'DINE_IN', tableCode: table.body.publicCode, customerPhone: undefined }).expect(201);
+    expect((await areas(menu.token)).body.find((row: { id: string }) => row.id === vip.body.id)).toMatchObject({ tableCount: 1, activeOrders: 1 });
+
+    const refused = await http().delete(`/v1/table-areas/${vip.body.id}`).set(auth(menu.token)).expect(409);
+    expect(refused.body.error).toMatchObject({ code: 'TABLE_AREA_NOT_EMPTY', details: { tables: 1, activeOrders: 1 } });
+    await http().delete(`/v1/table-areas/${vip.body.id}?moveTo=${vip.body.id}`).set(auth(menu.token)).expect(404);
+
+    // Moved to the garden: the table takes its location and keeps its open order.
+    await http().delete(`/v1/table-areas/${vip.body.id}?moveTo=${garden.body.id}`).set(auth(menu.token)).expect(204);
+    const after = (await http().get('/v1/tables').set(auth(menu.token)).expect(200)).body.find((row: { id: string }) => row.id === table.body.id);
+    expect(after).toMatchObject({ areaId: garden.body.id, location: 'OUTDOOR' });
+    expect((await http().get('/v1/orders/floor').set(auth(menu.token)).expect(200)).body.find((row: { id: string }) => row.id === table.body.id)).toMatchObject({ occupied: true });
+
+    // "none" leaves the tables without an area; an empty area just goes.
+    await http().delete(`/v1/table-areas/${garden.body.id}?moveTo=none`).set(auth(menu.token)).expect(204);
+    expect((await http().get('/v1/tables').set(auth(menu.token)).expect(200)).body.find((row: { id: string }) => row.id === table.body.id)).toMatchObject({ areaId: null, location: 'OUTDOOR' });
+    const empty = await http().post('/v1/table-areas').set(auth(menu.token)).send({ name: 'Smoking' }).expect(201);
+    await http().delete(`/v1/table-areas/${empty.body.id}`).set(auth(menu.token)).expect(204);
+    expect((await areas(menu.token)).body).toEqual([]);
+  });
+
+  it("keeps each restaurant's areas to itself", async () => {
+    const menu = await restaurantWithMenu();
+    const other = await restaurantWithMenu('other@koshary.test', 'other');
+    const area = await http().post('/v1/table-areas').set(auth(menu.token)).send({ name: 'Garden' }).expect(201);
+    expect((await areas(other.token)).body).toEqual([]);
+    await http().patch(`/v1/table-areas/${area.body.id}`).set(auth(other.token)).send({ name: 'Mine' }).expect(404);
+    await http().delete(`/v1/table-areas/${area.body.id}`).set(auth(other.token)).expect(404);
+    expect((await http().post('/v1/tables').set(auth(other.token)).send({ label: 'Sneaky', areaId: area.body.id }).expect(404)).body.error.code).toBe('TABLE_AREA_NOT_FOUND');
+  });
+});
+
+describe('floor plan details and reservations', () => {
+  it('keeps where each table sits on the plan, its minimum order, notes and attributes', async () => {
+    const menu = await restaurantWithMenu();
+    const vip = await http().post('/v1/tables').set(auth(menu.token))
+      .send({ label: 'VIP 1', minOrderPiastres: 50_000, notes: 'Near the window', attributes: ['VIP', 'WINDOW', 'VIP'] }).expect(201);
+    expect(vip.body).toMatchObject({ minOrderPiastres: 50_000, notes: 'Near the window', attributes: ['VIP', 'WINDOW'], floorX: null, floorY: null });
+    await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'Odd', attributes: ['JACUZZI'] }).expect(400);
+
+    const placed = await http().patch(`/v1/tables/${vip.body.id}`).set(auth(menu.token)).send({ floorX: 42.5, floorY: 18 }).expect(200);
+    expect(placed.body).toMatchObject({ floorX: 42.5, floorY: 18, notes: 'Near the window' });
+    await http().patch(`/v1/tables/${vip.body.id}`).set(auth(menu.token)).send({ floorX: 140 }).expect(400);
+    expect(placed.body).toMatchObject({ floorRotation: 0, floorScale: 1 });
+    const turned = await http().patch(`/v1/tables/${vip.body.id}`).set(auth(menu.token)).send({ floorRotation: -45, floorScale: 1.4 }).expect(200);
+    expect(turned.body.floorRotation).toBe(315);
+    expect(turned.body.floorScale).toBeCloseTo(1.4);
+    await http().patch(`/v1/tables/${vip.body.id}`).set(auth(menu.token)).send({ floorScale: 3 }).expect(400);
+    expect((await http().patch(`/v1/tables/${vip.body.id}`).set(auth(menu.token)).send({ floorRotation: 450 }).expect(200)).body.floorRotation).toBe(90);
+    const cleared = await http().patch(`/v1/tables/${vip.body.id}`).set(auth(menu.token)).send({ minOrderPiastres: null, notes: '', attributes: [] }).expect(200);
+    expect(cleared.body).toMatchObject({ minOrderPiastres: null, notes: null, attributes: [], floorX: 42.5 });
+  });
+
+  it('books tables, shows a booked table as reserved around its time, and lists bookings by day', async () => {
+    const menu = await restaurantWithMenu();
+    const table = await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'T-3' }).expect(201);
+    const soon = new Date(Date.now() + 45 * 60_000).toISOString();
+    const later = new Date(Date.now() + 6 * 60 * 60_000).toISOString();
+
+    const booking = await http().post('/v1/reservations').set(auth(menu.token))
+      .send({ customerName: 'Mona', customerPhone: '0100 123 4567', guests: 4, reservedAt: soon, tableId: table.body.id }).expect(201);
+    expect(booking.body).toMatchObject({ customerName: 'Mona', customerPhone: '01001234567', guests: 4, status: 'CONFIRMED', tableLabel: 'T-3' });
+    await http().post('/v1/reservations').set(auth(menu.token)).send({ customerName: 'Karim', guests: 2, reservedAt: later }).expect(201);
+    await http().post('/v1/reservations').set(auth(menu.token)).send({ customerName: 'Big', guests: 80, reservedAt: later }).expect(400);
+
+    const floor = async () => (await http().get('/v1/orders/floor').set(auth(menu.token)).expect(200)).body.find((row: { id: string }) => row.id === table.body.id);
+    expect((await floor()).reservation).toMatchObject({ id: booking.body.id, customerName: 'Mona', guests: 4 });
+
+    const from = new Date(Date.now() - 60 * 60_000).toISOString();
+    const to = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+    const listed = await http().get(`/v1/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`).set(auth(menu.token)).expect(200);
+    expect(listed.body.map((row: { customerName: string }) => row.customerName)).toEqual(['Mona', 'Karim']);
+    await http().get(`/v1/reservations?from=${encodeURIComponent(to)}&to=${encodeURIComponent(from)}`).set(auth(menu.token)).expect(400);
+
+    // Seating the guests frees the hold; cancelled bookings never hold a table.
+    const seated = await http().patch(`/v1/reservations/${booking.body.id}`).set(auth(menu.token)).send({ status: 'SEATED' }).expect(200);
+    expect(seated.body.status).toBe('SEATED');
+    expect((await floor()).reservation).toBeNull();
+
+    // Another restaurant cannot see, change or book onto these.
+    const other = await restaurantWithMenu('other@koshary.test', 'other');
+    expect((await http().get(`/v1/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`).set(auth(other.token)).expect(200)).body).toEqual([]);
+    await http().patch(`/v1/reservations/${booking.body.id}`).set(auth(other.token)).send({ status: 'CANCELLED' }).expect(404);
+    const stolen = await http().post('/v1/reservations').set(auth(other.token)).send({ customerName: 'X', guests: 2, reservedAt: soon, tableId: table.body.id }).expect(404);
+    expect(stolen.body.error.code).toBe('TABLE_NOT_FOUND');
   });
 });
 

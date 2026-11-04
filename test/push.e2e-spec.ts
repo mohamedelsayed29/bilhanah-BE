@@ -395,3 +395,93 @@ describe('Home Screen install', () => {
     expect(near(pixel(256, 100), [255, 255, 255])).toBe(true); // above the wide logo
   });
 });
+
+describe('order tracking', () => {
+  it('keeps the status history with who made each change, and the preparation estimate', async () => {
+    const s = await shop();
+    await http().patch('/v1/restaurants/mine').set(auth(s.token)).send({ orderPrepMinutes: 15 }).expect(200);
+    expect((await http().get('/v1/restaurants/mine').set(auth(s.token)).expect(200)).body.orderPrepMinutes).toBe(15);
+
+    const placed = await order(s);
+    const before = Date.now();
+    const accepted = (await setStatus(s.token, placed.id, 'ACCEPTED')).body;
+    // The restaurant's usual time when the staff give none.
+    const estimate = new Date(accepted.estimatedReadyAt).getTime();
+    expect(estimate - before).toBeGreaterThanOrEqual(15 * 60_000 - 1000);
+    expect(estimate - before).toBeLessThan(16 * 60_000);
+
+    // Preparing may revise it; other steps cannot take one.
+    const preparing = (await http().patch(`/v1/orders/${placed.id}/status`).set(auth(s.token)).send({ status: 'PREPARING', prepMinutes: 30 }).expect(200)).body;
+    expect(new Date(preparing.estimatedReadyAt).getTime()).toBeGreaterThan(estimate);
+    await http().patch(`/v1/orders/${placed.id}/status`).set(auth(s.token)).send({ status: 'READY', prepMinutes: 10 }).expect(400);
+    await http().patch(`/v1/orders/${placed.id}/status`).set(auth(s.token)).send({ status: 'PREPARING', prepMinutes: 200 }).expect(400);
+    // An invalid step is refused and leaves no trace.
+    await http().patch(`/v1/orders/${placed.id}/status`).set(auth(s.token)).send({ status: 'COMPLETED' }).expect(409);
+    await setStatus(s.token, placed.id, 'READY');
+
+    const owner = (await http().get(`/v1/orders/${placed.id}`).set(auth(s.token)).expect(200)).body;
+    expect(owner.history.map((step: { status: string; actorName: string | null }) => [step.status, step.actorName])).toEqual([
+      ['PLACED', null], ['ACCEPTED', 'Test Owner'], ['PREPARING', 'Test Owner'], ['READY', 'Test Owner'],
+    ]);
+    // Diners see the steps and times, not who made them; a reload gets the latest state.
+    const tracked = (await http().get(`/v1/public/orders/${placed.trackingToken}`).expect(200)).body;
+    expect(tracked.status).toBe('READY');
+    expect(tracked.history.map((step: { status: string }) => step.status)).toEqual(['PLACED', 'ACCEPTED', 'PREPARING', 'READY']);
+    expect(tracked.history[0]).not.toHaveProperty('actorName');
+    expect(tracked.estimatedReadyAt).toBe(preparing.estimatedReadyAt);
+
+    // Cancelled orders keep the reason in their history.
+    const other = await order(s);
+    await setStatus(s.token, other.id, 'REJECTED', 'Out of rice');
+    const rejected = (await http().get(`/v1/public/orders/${other.trackingToken}`).expect(200)).body;
+    expect(rejected.history.at(-1)).toMatchObject({ status: 'REJECTED', reason: 'Out of rice' });
+    expect(rejected.estimatedReadyAt).toBeNull();
+  });
+
+  it('pushes every step to diners who asked for all updates, and only the end to the rest', async () => {
+    const s = await shop();
+    const jobs = t.app.get<PushJobs>(PUSH_JOBS);
+    const placed = await order(s);
+    await subscribe(placed.trackingToken, { ...browserSubscription(), updates: 'ALL' }).expect(204);
+    await subscribe(placed.trackingToken, browserSubscription()).expect(204);
+    const all = await t.prisma.pushSubscription.findFirstOrThrow({ where: { orderId: placed.id, updates: 'ALL' } });
+    const ready = await t.prisma.pushSubscription.findFirstOrThrow({ where: { orderId: placed.id, updates: 'READY' } });
+    await subscribe(placed.trackingToken, { ...browserSubscription(), updates: 'SOME' }).expect(400);
+
+    await http().patch(`/v1/orders/${placed.id}/status`).set(auth(s.token)).send({ status: 'ACCEPTED', prepMinutes: 20 }).expect(200);
+    await setStatus(s.token, placed.id, 'PREPARING');
+    await setStatus(s.token, placed.id, 'READY');
+    const ids = (await jobs.getJobs(['waiting', 'delayed', 'active'])).map((job) => job.id).sort();
+    expect(ids).toEqual([`${all.id}_ACCEPTED`, `${all.id}_PREPARING`, `${all.id}_READY`, `${ready.id}_READY`].sort());
+
+    // The accepted update says when to expect it.
+    const sent: Record<string, unknown>[] = [];
+    const fakePush = { send: async (_target: PushTarget, payload: string) => { sent.push(JSON.parse(payload) as Record<string, unknown>); return 'delivered'; } } as unknown as PushService;
+    const processor = new PushProcessor(t.prisma, fakePush, t.app.get(MediaService), t.app.get(TrackingTokens), t.app.get(ConfigService));
+    await processor.process({ data: { subscriptionId: all.id, status: 'ACCEPTED' } });
+    expect(sent[0]!.body).toMatch(/^المطعم أكّد طلبك رقم .+ متوقع يجهز حوالي .+\.$/);
+  });
+
+  it('counts tracking page visits, delivered ready alerts and on-time orders', async () => {
+    const s = await shop();
+    const stats = async () => (await http().get('/v1/orders/tracking-stats?days=7').set(auth(s.token)).expect(200)).body;
+    expect(await stats()).toMatchObject({ orders: 0, trackingRate: null, readyDeliveryRate: null, onTimeRate: null, statusEnquiries: 0 });
+
+    const followed = await order(s);
+    await order(s);
+    await http().get(`/v1/public/orders/${followed.trackingToken}`).expect(200);
+    await http().get(`/v1/public/orders/${followed.trackingToken}`).expect(200);
+    await subscribe(followed.trackingToken, browserSubscription()).expect(204);
+    await http().patch(`/v1/orders/${followed.id}/status`).set(auth(s.token)).send({ status: 'ACCEPTED', prepMinutes: 30 }).expect(200);
+    await setStatus(s.token, followed.id, 'READY');
+    const subscription = await t.prisma.pushSubscription.findFirstOrThrow({ where: { orderId: followed.id } });
+    const fakePush = { send: async () => 'delivered' } as unknown as PushService;
+    const processor = new PushProcessor(t.prisma, fakePush, t.app.get(MediaService), t.app.get(TrackingTokens), t.app.get(ConfigService));
+    await processor.process({ data: { subscriptionId: subscription.id, status: 'READY' } });
+    await processor.process({ data: { subscriptionId: subscription.id, status: 'READY' } });
+
+    await expect.poll(stats).toMatchObject({
+      orders: 2, tracked: 1, trackingRate: 0.5, readyAlertOrders: 1, readyNotified: 1, readyDeliveryRate: 1, estimatedOrders: 1, readyOnTime: 1, onTimeRate: 1,
+    });
+  });
+});

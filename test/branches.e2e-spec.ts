@@ -137,6 +137,19 @@ describe('branches', () => {
     const mainCodes = new Set(main.body.map((table: { publicCode: string }) => table.publicCode));
     expect(maadi.body.some((table: { publicCode: string }) => mainCodes.has(table.publicCode))).toBe(false);
   });
+
+  it('copies the seating areas with the tables, each table in its copied area', async () => {
+    const { token, mainId } = await chain();
+    const garden = await http().post('/v1/table-areas').set(auth(token)).send({ branchId: mainId, name: 'Garden', location: 'OUTDOOR' }).expect(201);
+    await http().post('/v1/tables').set(auth(token)).send({ branchId: mainId, label: 'G1', areaId: garden.body.id }).expect(201);
+    await http().post('/v1/tables').set(auth(token)).send({ branchId: mainId, label: 'Bar' }).expect(201);
+    const copy = await http().post('/v1/branches').set(auth(token)).send({ ...NASR, slug: 'maadi', name: 'Maadi', copyTablesFrom: mainId }).expect(201);
+    const areas = (await http().get(`/v1/table-areas?branchId=${copy.body.id}`).set(auth(token)).expect(200)).body;
+    expect(areas).toEqual([expect.objectContaining({ name: 'Garden', location: 'OUTDOOR', tableCount: 1 })]);
+    expect(areas[0].id).not.toBe(garden.body.id);
+    const tables = (await http().get(`/v1/tables?branchId=${copy.body.id}`).set(auth(token)).expect(200)).body;
+    expect(tables.map((table: { label: string; areaId: string | null }) => [table.label, table.areaId])).toEqual([['G1', areas[0].id], ['Bar', null]]);
+  });
 });
 
 describe('diners and branches', () => {
@@ -274,7 +287,9 @@ describe('branch staff', () => {
     expect((await http().patch(`/v1/branches/${mainId}`).set(auth(manager.token)).send({ ordersPaused: true }).expect(403)).body.error.code).toBe('BRANCH_FORBIDDEN');
     await http().put(`/v1/branches/${nasrId}/menu/items/${dish.id}`).set(auth(manager.token)).send({ prices: [{ variantId: dish.variant, pricePiastres: 3900 }] }).expect(200);
     await http().post('/v1/branches').set(auth(manager.token)).send({ ...NASR, slug: 'other' }).expect(403);
-    await http().get('/v1/kitchen-accounts').set(auth(manager.token)).expect(403);
+    // Managers see staff, but only their branch's.
+    const branchStaff = (await http().get('/v1/kitchen-accounts').set(auth(manager.token)).expect(200)).body as { branchId: string | null }[];
+    expect(branchStaff.every((member) => member.branchId === nasrId)).toBe(true);
     await http().patch('/v1/restaurants/mine').set(auth(manager.token)).send({ name: 'Hijacked' }).expect(403);
 
     const branches = await http().get('/v1/branches').set(auth(manager.token)).expect(200);
@@ -288,7 +303,9 @@ describe('branch staff', () => {
 
     const stats = await http().get(`/v1/restaurants/mine/stats?days=7`).set(auth(manager.token)).expect(200);
     expect(stats.body).toMatchObject({ branchId: nasrId, totals: { orders: 1 } });
-    await http().get('/v1/restaurants/mine/stats/branches').set(auth(manager.token)).expect(403);
+    // The comparison is limited to their branch.
+    const comparison = await http().get('/v1/restaurants/mine/stats/branches').set(auth(manager.token)).expect(200);
+    expect(comparison.body.branches.map((row: { id: string }) => row.id)).toEqual([nasrId]);
 
     const context = await http().get('/v1/kitchen/context').set(auth(manager.token)).expect(200);
     expect(context.body).toMatchObject({ role: 'MANAGER', branch: { id: nasrId, name: 'Nasr City' }, ordering: { paused: true } });

@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
+  KITCHEN_DISPLAY_ERROR_CODES,
   type createCategorySchema,
   type createItemSchema,
   MENU_ERROR_CODES,
@@ -74,6 +75,7 @@ export class MenusService {
       nameAr: category.nameAr,
       nameEn: category.nameEn,
       isVisible: category.isVisible,
+      stationId: category.stationId,
       items: category.items.map((item) => this.toOwnerItem(item)),
     }));
   }
@@ -98,16 +100,18 @@ export class MenusService {
         _max: { sortOrder: true },
       });
       if (_count >= MENU_LIMITS.categories) throw limitReached('categories', MENU_LIMITS.categories);
+      await this.assertStation(tx, restaurantId, input.stationId);
       const category = await tx.category.create({
         data: { ...input, restaurantId, sortOrder: (_max.sortOrder ?? -1) + 1 },
       });
-      return { id: category.id, nameAr: category.nameAr, nameEn: category.nameEn, isVisible: category.isVisible, items: [] };
+      return { id: category.id, nameAr: category.nameAr, nameEn: category.nameEn, isVisible: category.isVisible, stationId: category.stationId, items: [] };
     });
   }
 
   async updateCategory(ownerId: string, categoryId: string, input: z.output<typeof updateCategorySchema>): Promise<void> {
     const restaurantId = await this.restaurantIdFor(ownerId);
     await this.change(restaurantId, async (tx) => {
+      await this.assertStation(tx, restaurantId, input.stationId);
       const updated = await tx.category.updateMany({ where: { id: categoryId, restaurantId }, data: input });
       if (updated.count === 0) throw categoryNotFound();
     });
@@ -139,6 +143,7 @@ export class MenusService {
     const { variants, ...fields } = input;
     return this.change(restaurantId, async (tx) => {
       await this.assertCategory(tx, restaurantId, input.categoryId);
+      await this.assertStation(tx, restaurantId, input.stationId);
       if ((await tx.menuItem.count({ where: { restaurantId } })) >= MENU_LIMITS.items) {
         throw limitReached('items', MENU_LIMITS.items);
       }
@@ -162,6 +167,7 @@ export class MenusService {
     return this.change(restaurantId, async (tx) => {
       const current = await tx.menuItem.findFirst({ where: { id: itemId, restaurantId }, select: { categoryId: true } });
       if (!current) throw itemNotFound();
+      await this.assertStation(tx, restaurantId, input.stationId);
 
       const data: Prisma.MenuItemUncheckedUpdateInput = { ...fields };
       if (input.categoryId && input.categoryId !== current.categoryId) {
@@ -275,8 +281,15 @@ export class MenusService {
     if (!category) throw categoryNotFound();
   }
 
+  /** A kitchen station of this restaurant (or none). */
+  private async assertStation(tx: Tx, restaurantId: string, stationId: string | null | undefined): Promise<void> {
+    if (!stationId) return;
+    const station = await tx.kitchenStation.count({ where: { id: stationId, restaurantId } });
+    if (!station) throw new NotFoundException({ code: KITCHEN_DISPLAY_ERROR_CODES.STATION_NOT_FOUND, message: 'Kitchen station not found.' });
+  }
+
   private toPublicItem(item: ItemRow): PublicMenuItem {
-    const { categoryId: _category, isVisible: _visible, ...publicItem } = this.toOwnerItem(item);
+    const { categoryId: _category, isVisible: _visible, stationId: _station, ...publicItem } = this.toOwnerItem(item);
     return publicItem;
   }
 
@@ -291,6 +304,7 @@ export class MenusService {
       image: item.image ? this.media.toImageSet(item.image) : null,
       isAvailable: item.isAvailable,
       isVisible: item.isVisible,
+      stationId: item.stationId,
       variants: item.variants.map((variant) => ({
         id: variant.id,
         nameAr: variant.nameAr,
