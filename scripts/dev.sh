@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs Bilhanah locally: Docker services, migrations, then the API and the
-# background worker, plus the website and the dashboard when their repositories
-# are cloned next to this one (../bilhanah-client-FE, ../bilhanah-dashboard-FE).
+# background worker, plus the frontends when their repositories are cloned next
+# to this one: ../bilhanah-client-FE (the website, and the restaurants' dashboard
+# in its dashboard/ folder) and ../bilhanah-dashboard-FE (Bilhanah's admin console).
 # Ctrl+C stops the apps; the Docker services keep running (stop them with
 # `npm run services:down`).
 #
@@ -14,12 +15,15 @@ cd "$ROOT"
 NPM_PREFIX="$(npm prefix)"
 NPM_BIN="$NPM_PREFIX/node_modules/.bin"
 WEB_DIR="$(dirname "$ROOT")/bilhanah-client-FE"
-DASHBOARD_DIR="$(dirname "$ROOT")/bilhanah-dashboard-FE"
+# The restaurants' dashboard (owners, staff, kitchen) lives in the website's repository.
+DASHBOARD_DIR="$WEB_DIR/dashboard"
+# Bilhanah's own admin console.
+ADMIN_DIR="$(dirname "$ROOT")/bilhanah-dashboard-FE"
 
 WEB_PORT="${WEB_PORT:-5180}"
 # Fixed: the API allows this origin (CORS_ORIGINS) and email links point at it (DASHBOARD_URL).
 DASHBOARD_PORT=5174
-# The platform admin console: the same dashboard code as its own app, origin and session (ADMIN_ORIGINS).
+# The platform admin console (bilhanah-dashboard-FE): its own app, origin and session (ADMIN_ORIGINS).
 ADMIN_PORT=5175
 
 bold=$'\e[1m' red=$'\e[31m' green=$'\e[32m' yellow=$'\e[33m' blue=$'\e[34m' magenta=$'\e[35m' cyan=$'\e[36m' reset=$'\e[0m'
@@ -118,7 +122,8 @@ if [[ ! -f packages/contracts/dist/index.js || ! -f packages/database/dist/index
   fi
 fi
 frontends=()
-for dir in "$WEB_DIR" "$DASHBOARD_DIR"; do
+# The website's install covers the restaurants' dashboard too (an npm workspace of that repository).
+for dir in "$WEB_DIR" "$ADMIN_DIR"; do
   if [[ -f "$dir/package.json" ]]; then
     frontends+=("$dir")
     if [[ ! -d "$dir/node_modules" || "$dir/package-lock.json" -nt "$dir/node_modules/.package-lock.json" ]]; then
@@ -130,14 +135,14 @@ for dir in "$WEB_DIR" "$DASHBOARD_DIR"; do
   fi
 done
 
-# The dashboard is nested in the backend's enclosing npm workspace, so npm
+# The admin console is nested in the backend's enclosing npm workspace, so npm
 # resolves @bilhanah/contracts to the root package (an older, partial copy).
 # Link its repository-local contracts before typechecking or serving it.
-if [[ -f "$DASHBOARD_DIR/packages/contracts/tsconfig.json" ]]; then
-  mkdir -p "$DASHBOARD_DIR/node_modules/@bilhanah"
-  ln -sfn ../../packages/contracts "$DASHBOARD_DIR/node_modules/@bilhanah/contracts"
-  ln -sfn "$ROOT/packages/config" "$DASHBOARD_DIR/node_modules/@bilhanah/config"
-  "$NPM_BIN/tsc" -p "$DASHBOARD_DIR/packages/contracts/tsconfig.json"
+if [[ -f "$ADMIN_DIR/packages/contracts/tsconfig.json" ]]; then
+  mkdir -p "$ADMIN_DIR/node_modules/@bilhanah"
+  ln -sfn ../../packages/contracts "$ADMIN_DIR/node_modules/@bilhanah/contracts"
+  ln -sfn "$ROOT/packages/config" "$ADMIN_DIR/node_modules/@bilhanah/config"
+  "$NPM_BIN/tsc" -p "$ADMIN_DIR/packages/contracts/tsconfig.json"
 fi
 
 # --- Services and database --------------------------------------------------
@@ -172,7 +177,7 @@ start() {
   pids+=("$!")
 }
 
-step "Starting the API and worker${frontends:+, website and dashboard}"
+step "Starting the API and worker${frontends:+, website, dashboard and admin console}"
 start api "$green" "npm run --silent start:dev"
 start worker "$magenta" "npm run --silent start:worker:dev"
 if grep -q '^PAYMOB_API_URL=http://127.0.0.1:4010' .env; then
@@ -183,8 +188,10 @@ if [[ -f "$WEB_DIR/package.json" ]]; then
     VITE_DASHBOARD_URL=http://127.0.0.1:$DASHBOARD_PORT npm run --silent dev -- --port $WEB_PORT --strictPort"
 fi
 if [[ -f "$DASHBOARD_DIR/package.json" ]]; then
-  start dashboard "$yellow" "cd '$DASHBOARD_DIR' && VITE_API_URL=http://127.0.0.1:$API_PORT VITE_ADMIN_URL=http://127.0.0.1:$ADMIN_PORT npm run --silent dev"
-  start admin "$red" "cd '$DASHBOARD_DIR' && VITE_APP=admin VITE_API_URL=http://127.0.0.1:$API_PORT npm run --silent dev -- --port $ADMIN_PORT --strictPort"
+  start dashboard "$yellow" "cd '$DASHBOARD_DIR' && VITE_API_URL=http://127.0.0.1:$API_PORT VITE_ADMIN_URL=http://127.0.0.1:$ADMIN_PORT npm run --silent dev -- --port $DASHBOARD_PORT --strictPort"
+fi
+if [[ -f "$ADMIN_DIR/package.json" ]]; then
+  start admin "$red" "cd '$ADMIN_DIR' && VITE_API_URL=http://127.0.0.1:$API_PORT npm run --silent dev -- --port $ADMIN_PORT --strictPort"
 fi
 
 # Wait for the API, then print where everything is.
@@ -198,7 +205,7 @@ if curl -sf "http://127.0.0.1:$API_PORT/health/ready" >/dev/null 2>&1; then
 ${bold}${green}Bilhanah is running${reset}
   Website            http://127.0.0.1:$WEB_PORT
   Restaurant pages   http://<subdomain>.localhost:$WEB_PORT
-  Dashboard          http://127.0.0.1:$DASHBOARD_PORT
+  Dashboard          http://127.0.0.1:$DASHBOARD_PORT  (restaurants: owners, staff, kitchen)
   Admin console      http://127.0.0.1:$ADMIN_PORT  (Bilhanah team only)
   API                http://127.0.0.1:$API_PORT  (health: /health/ready)
   Email (Mailpit)    http://127.0.0.1:8025

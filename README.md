@@ -5,14 +5,14 @@ Digital menus, ordering and order-ready alerts for restaurants in Egypt. Bilhana
 | Repository | What it is |
 | --- | --- |
 | **bilhanah-BE** (this one) | NestJS API and background worker, the shared `packages/`, and `infra/` (local services, the production stack, deploys) |
-| [bilhanah-client-FE](https://github.com/mohamedelsayed29/bilhanah-client-FE) | Public website and restaurant pages, `{subdomain}.bilhanah.com` |
-| [bilhanah-dashboard-FE](https://github.com/mohamedelsayed29/bilhanah-dashboard-FE) | Restaurant-owner dashboard and the admin console |
+| [bilhanah-client-FE](https://github.com/mohamedelsayed29/bilhanah-client-FE) | Everything restaurants and diners use: the public website and restaurant pages (`{subdomain}.bilhanah.com`), and in `dashboard/` the restaurants' dashboard (owners, staff, kitchen) |
+| [bilhanah-dashboard-FE](https://github.com/mohamedelsayed29/bilhanah-dashboard-FE) | The Bilhanah dashboard: the platform admin console for Bilhanah's own team |
 
 ```
 bilhanah/
   bilhanah-BE/
-  bilhanah-client-FE/
-  bilhanah-dashboard-FE/
+  bilhanah-client-FE/        website (src/) + restaurants' dashboard (dashboard/)
+  bilhanah-dashboard-FE/     admin console
 ```
 
 | Path | What it is |
@@ -42,7 +42,8 @@ bash run.sh --update   # pulls the latest main in all three repositories first
 | --- | --- |
 | Website | http://127.0.0.1:5180 |
 | A restaurant's page | http://`<subdomain>`.localhost:5180 |
-| Dashboard (owners) | http://127.0.0.1:5174 |
+| Restaurants' dashboard (owners, staff, kitchen) | http://127.0.0.1:5174 |
+| Admin console (Bilhanah team) | http://127.0.0.1:5175 |
 | API | http://127.0.0.1:3000 (`/health/ready`) |
 | Email sent by the app (Mailpit) | http://127.0.0.1:8025 |
 
