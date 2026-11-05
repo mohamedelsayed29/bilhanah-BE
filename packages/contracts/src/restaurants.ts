@@ -122,6 +122,10 @@ export const updateRestaurantSchema = z.strictObject({
   serviceRequestsEnabled: z.boolean().optional(),
   serviceRequestCooldownSeconds: z.number().int().min(SERVICE_REQUEST_THROTTLE.cooldownSeconds.min).max(SERVICE_REQUEST_THROTTLE.cooldownSeconds.max).optional(),
   serviceRequestHourlyLimit: z.number().int().min(SERVICE_REQUEST_THROTTLE.hourlyLimit.min).max(SERVICE_REQUEST_THROTTLE.hourlyLimit.max).optional(),
+  /** Shared table sessions: guests at a scanned table build one order together (see table-sessions.ts). */
+  tableSessionsEnabled: z.boolean().optional(),
+  /** Guests may change and remove each other's unsent dishes, not only their own. */
+  tableSessionSharedEditing: z.boolean().optional(),
   /** The usual preparation time diners see when an order is accepted; null shows none. */
   orderPrepMinutes: z.number().int().min(ORDER_PREP_MINUTES.min).max(ORDER_PREP_MINUTES.max).nullable().optional(),
 });
@@ -142,7 +146,7 @@ export type OrderingSettings = {
  * What diners need to decide whether to show the cart. Opening hours are checked separately.
  * `serviceRequests`: a diner at a table can call the staff from the menu.
  */
-export type PublicOrdering = { accepting: boolean; dineIn: boolean; pickup: boolean; serviceRequests: boolean };
+export type PublicOrdering = { accepting: boolean; dineIn: boolean; pickup: boolean; serviceRequests: boolean; /** Guests at a scanned table order together. */ sharedTable: boolean };
 
 /** Presentation shared by the owner and public views. */
 export type RestaurantBranding = {
@@ -177,6 +181,7 @@ export type OwnerRestaurant = {
   /** The main branch's ordering settings (openingHours is the main branch's too). */
   ordering: OrderingSettings;
   serviceRequests: ServiceRequestSettings;
+  tableSessions: { enabled: boolean; sharedEditing: boolean };
   /** The usual preparation time shown to diners on accepted orders; null shows none. */
   orderPrepMinutes: number | null;
   mainBranchId: string;

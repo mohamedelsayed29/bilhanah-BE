@@ -16,6 +16,9 @@ describe('restaurant permissions', () => {
     expect(ROLE_PERMISSIONS.WAITER).not.toContain('payments.process');
     expect(ROLE_PERMISSIONS.KITCHEN).not.toContain('payments.process');
     expect(ROLE_PERMISSIONS.MANAGER).not.toContain('billing.manage');
+    // Cashiers work their own drawer; approving cash and its rules stay with managers and owners.
+    expect(ROLE_PERMISSIONS.CASHIER).toContain('cash.operate');
+    for (const permission of ['cash.approve', 'cash.settings', 'cash.view'] as const) expect(ROLE_PERMISSIONS.CASHIER).not.toContain(permission);
   });
 
   it('only adds grants the role may have', () => {
@@ -30,7 +33,7 @@ describe('restaurant permissions', () => {
   });
 
   it('lets managers grant only what they hold', () => {
-    expect(grantablePermissions('CASHIER', effectivePermissions('MANAGER'))).toEqual([]);
-    expect(grantablePermissions('CASHIER', effectivePermissions('MANAGER', ['payments.refund']))).toEqual(['payments.refund']);
+    expect(grantablePermissions('CASHIER', effectivePermissions('MANAGER'))).toEqual(['cash.adjust', 'cash.view']);
+    expect(grantablePermissions('CASHIER', effectivePermissions('MANAGER', ['payments.refund']))).toEqual(['payments.refund', 'cash.adjust', 'cash.view']);
   });
 });

@@ -11,6 +11,7 @@ import {
   ORDER_ITEM_TRANSITIONS,
   type OrderItemEvent,
   type OrderItemStatus,
+  type OrderPaymentMethod,
   type OrderPriority,
   type updateOrderItemsStatusSchema,
   type OrderStatus,
@@ -40,6 +41,7 @@ import { BranchScopeService, branchNotFound } from '../branches/branch-scope.ser
 import { MenusService } from '../menus/menus.service.js';
 import { RecommendationsService } from '../recommendations/recommendations.service.js';
 import { KitchenStationsService } from '../kitchen-display/kitchen-stations.service.js';
+import { CashService } from '../cash/cash.service.js';
 import { forwardSteps, itemCascade, itemTimestamps, orderTargetFromItems } from './order-items.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { hasAccess } from '../subscriptions/access.js';
@@ -60,6 +62,17 @@ type OrderRow = Prisma.OrderGetPayload<{ include: typeof orderInclude }>;
 
 /** Rejected and cancelled orders have no bill, so they never keep a table occupied. */
 const UNBILLED_STATUSES: OrderStatus[] = ['REJECTED', 'CANCELLED'];
+
+/** A dish of a shared submission changed on another phone meanwhile; the order was not created. */
+export class SharedCartChanged extends Error {}
+
+/** A shared table session's dishes sent as one order: who added each line, and the cart rows behind them. */
+export type SharedSubmission = {
+  sessionId: string;
+  /** One per order line, in the same order as the lines. */
+  guests: { id: string; name: string }[];
+  cartItems: { id: string; version: number }[];
+};
 
 const orderNotFound = () => new NotFoundException({ code: ORDER_ERROR_CODES.ORDER_NOT_FOUND, message: 'Order not found.' });
 const restaurantNotFound = () =>
@@ -91,6 +104,7 @@ export class OrdersService {
     private readonly menus: MenusService,
     private readonly recommendations: RecommendationsService,
     private readonly stations: KitchenStationsService,
+    private readonly cash: CashService,
   ) {}
 
   // --- Diners --------------------------------------------------------------
@@ -100,6 +114,7 @@ export class OrdersService {
     idempotencyKey: string,
     input: z.output<typeof placeOrderSchema>,
     now = new Date(),
+    shared?: SharedSubmission,
   ): Promise<PlaceOrderResponse> {
     const restaurant = await this.prisma.restaurant.findUnique({ where: { subdomain: normalizeSubdomain(rawSubdomain) } });
     if (!restaurant) throw restaurantNotFound();
@@ -142,6 +157,10 @@ export class OrdersService {
     }
 
     const lines = await this.priceLines(restaurant.id, branch.id, input.items);
+    // An order placed at a table belongs to the table's open session (shared or not), for its bill and metrics.
+    const sessionId = shared?.sessionId ?? (table
+      ? (await this.prisma.tableSession.findFirst({ where: { tableId: table.id, status: { not: 'CLOSED' } }, select: { id: true } }))?.id ?? null
+      : null);
     const subtotalPiastres = lines.reduce((sum, line) => sum + line.unitPricePiastres * line.quantity, 0);
     const day = businessDay(now, restaurant.timezone);
 
@@ -153,7 +172,7 @@ export class OrdersService {
           VALUES (${branch.id}::uuid, ${day}::date, 1)
           ON CONFLICT (branch_id, business_day) DO UPDATE SET last_number = order_counters.last_number + 1
           RETURNING last_number`;
-        return tx.order.create({
+        const created = await tx.order.create({
           data: {
             restaurantId: restaurant.id,
             branchId: branch.id,
@@ -168,11 +187,23 @@ export class OrdersService {
             subtotalPiastres,
             idempotencyKey,
             placedAt: now,
-            items: { create: lines.map((line, sortOrder) => ({ ...line, sortOrder })) },
+            tableSessionId: sessionId,
+            items: { create: lines.map((line, sortOrder) => ({ ...line, sortOrder, guestId: shared?.guests[sortOrder]?.id ?? null, guestName: shared?.guests[sortOrder]?.name ?? null })) },
             statusEvents: { create: { status: 'PLACED', createdAt: now } },
           },
           include: orderInclude,
         });
+        if (shared) {
+          // The dishes leave the shared cart with the order, or not at all: a dish another phone sent,
+          // changed or removed meanwhile cancels this submission (nothing is ordered twice).
+          const { count } = await tx.tableCartItem.updateMany({
+            where: { id: { in: shared.cartItems.map((item) => item.id) }, sessionId: shared.sessionId, status: 'DRAFT', OR: shared.cartItems.map((item) => ({ id: item.id, version: item.version })) },
+            data: { status: 'SUBMITTED', orderId: created.id, submittedAt: now, version: { increment: 1 } },
+          });
+          if (count !== shared.cartItems.length) throw new SharedCartChanged();
+          await tx.tableSession.update({ where: { id: shared.sessionId }, data: { lastActivityAt: now, version: { increment: 1 } } });
+        }
+        return created;
       });
     } catch (error) {
       // Two concurrent submissions with the same key: return the one that won.
@@ -463,22 +494,44 @@ export class OrdersService {
     };
   }
 
-  /** Marks the bill paid or, to undo a mistake, unpaid. */
-  async setPaid(userId: string, orderId: string, paid: boolean): Promise<OwnerOrder> {
+  /**
+   * Marks the bill paid or, to undo a mistake, unpaid. A cash bill goes into the caller's cash drawer
+   * (and a reversed one comes out of it). The change is conditional on the paid state the request
+   * saw, so two cashiers pressing at once record one payment.
+   */
+  async setPaid(userId: string, orderId: string, paid: boolean, method: OrderPaymentMethod = 'CASH'): Promise<OwnerOrder> {
     const scope = await this.scopes.resolve(userId);
     // Marking a paid bill unpaid again reverses a payment: a refund.
     this.scopes.require(scope, paid ? 'payments.process' : 'payments.refund');
     const own = await this.scopes.branchWhere(scope);
     const restaurantId = own.restaurantId;
-    const current = await this.prisma.order.findFirst({ where: { id: orderId, ...own }, select: { status: true, paidAt: true } });
+    const current = await this.prisma.order.findFirst({
+      where: { id: orderId, ...own },
+      select: { status: true, paidAt: true, paymentMethod: true, branchId: true, subtotalPiastres: true },
+    });
     if (!current) throw orderNotFound();
     if (paid && UNBILLED_STATUSES.includes(current.status)) {
       throw new ConflictException({ code: ORDER_ERROR_CODES.ORDER_NOT_PAYABLE, message: 'A rejected or cancelled order has nothing to pay.' });
     }
     if (paid === Boolean(current.paidAt)) return this.get(userId, orderId);
-    const order = await this.prisma.order.update({ where: { id: orderId }, data: { paidAt: paid ? new Date() : null }, include: orderInclude });
+    const now = new Date();
+    const changed = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.order.updateMany({
+        where: { id: orderId, paidAt: current.paidAt },
+        data: paid ? { paidAt: now, paymentMethod: method } : { paidAt: null, paymentMethod: null },
+      });
+      if (!count) return false;
+      if (paid && method === 'CASH') {
+        await this.cash.recordOrderCash(tx, { scope, branchId: current.branchId, orderId, kind: 'SALE', amountPiastres: current.subtotalPiastres, paidAt: now });
+      }
+      if (!paid && current.paidAt && current.paymentMethod === 'CASH') {
+        await this.cash.recordOrderCash(tx, { scope, branchId: current.branchId, orderId, kind: 'REFUND', amountPiastres: current.subtotalPiastres, paidAt: current.paidAt });
+      }
+      return true;
+    });
+    const order = await this.prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: orderInclude });
     const ownerView = this.toOwnerOrder(order);
-    this.realtime.emitOrderUpdated(restaurantId, ownerView, this.toPublicOrder(order));
+    if (changed) this.realtime.emitOrderUpdated(restaurantId, ownerView, this.toPublicOrder(order));
     return ownerView;
   }
 
@@ -538,8 +591,9 @@ export class OrdersService {
   }
 
   /** The guests paid and left: marks every open order on the table paid, freeing it. */
-  async settleTable(userId: string, tableId: string, now = new Date()): Promise<TableOccupancy[]> {
-    const own = await this.ownWhere(userId);
+  async settleTable(userId: string, tableId: string, method: OrderPaymentMethod = 'CASH', now = new Date()): Promise<TableOccupancy[]> {
+    const scope = await this.scopes.resolve(userId);
+    const own = await this.scopes.branchWhere(scope);
     const restaurantId = own.restaurantId;
     const table = await this.prisma.table.findFirst({ where: { id: tableId, ...own }, select: { id: true, label: true, branchId: true } });
     if (!table) throw new NotFoundException({ code: ORDER_ERROR_CODES.TABLE_NOT_FOUND, message: 'Table not found.' });
@@ -547,14 +601,30 @@ export class OrdersService {
       ...this.openOnTableWhere(table.branchId, now),
       OR: [{ tableId: table.id }, { tableId: null, tableLabel: table.label }],
     };
-    const ids = (await this.prisma.order.findMany({ where, select: { id: true } })).map((order) => order.id);
+    const open = await this.prisma.order.findMany({ where, select: { id: true, subtotalPiastres: true } });
+    const ids = open.map((order) => order.id);
     if (ids.length) {
-      await this.prisma.order.updateMany({ where: { id: { in: ids }, paidAt: null }, data: { paidAt: now } });
+      await this.prisma.$transaction(async (tx) => {
+        for (const order of open) {
+          // Per order and conditional: an order paid meanwhile is neither re-marked nor counted again.
+          const { count } = await tx.order.updateMany({ where: { id: order.id, paidAt: null }, data: { paidAt: now, paymentMethod: method } });
+          if (count && method === 'CASH') {
+            await this.cash.recordOrderCash(tx, { scope, branchId: table.branchId, orderId: order.id, kind: 'SALE', amountPiastres: order.subtotalPiastres, paidAt: now });
+          }
+        }
+      });
       const orders = await this.prisma.order.findMany({ where: { id: { in: ids } }, include: orderInclude });
       for (const order of orders) this.realtime.emitOrderUpdated(restaurantId, this.toOwnerOrder(order), this.toPublicOrder(order));
     }
-    // The guests have left: their table session (and its service requests' context) ends with the bill.
-    await this.prisma.tableSession.updateMany({ where: { tableId: table.id, endedAt: null }, data: { endedAt: now } });
+    // The guests have left: their table session (shared order, service requests) ends with the bill.
+    const sessions = await this.prisma.tableSession.findMany({ where: { tableId: table.id, status: { not: 'CLOSED' } }, select: { id: true } });
+    if (sessions.length) {
+      await this.prisma.tableSession.updateMany({
+        where: { id: { in: sessions.map((session) => session.id) }, status: { not: 'CLOSED' } },
+        data: { status: 'CLOSED', closedReason: 'SETTLED', endedAt: now, version: { increment: 1 } },
+      });
+      for (const session of sessions) this.realtime.emitTableSession(session.id, { reason: 'status', status: 'CLOSED' });
+    }
     return this.floor(userId, table.branchId, now);
   }
 
@@ -568,7 +638,8 @@ export class OrdersService {
 
   /** Current names and prices for the ordered dishes; rejects dishes that are sold out, hidden or gone. */
   /** Current names and the branch's prices; rejects dishes sold out or hidden (shared or at this branch) or gone. */
-  private async priceLines(restaurantId: string, branchId: string, items: z.output<typeof placeOrderSchema>['items']) {
+  /** Current names, prices and stations of dishes at a branch; ITEMS_UNAVAILABLE for any not orderable now. */
+  async priceLines(restaurantId: string, branchId: string, items: z.output<typeof placeOrderSchema>['items']) {
     const [menuItems, overrides] = await Promise.all([
       this.prisma.menuItem.findMany({
         where: {
@@ -670,6 +741,7 @@ export class OrdersService {
         prepStatus: item.prepStatus,
         startedAt: item.startedAt?.toISOString() ?? null,
         readyAt: item.readyAt?.toISOString() ?? null,
+        guestName: item.guestName,
       })),
       placedAt: order.placedAt.toISOString(),
       acceptedAt: order.acceptedAt?.toISOString() ?? null,
@@ -692,6 +764,7 @@ export class OrdersService {
       customerPhone: order.customerPhone,
       notifiesDiner: order._count.pushSubscriptions > 0,
       priority: order.priority,
+      paymentMethod: order.paymentMethod,
       ...this.core(order),
       history: order.statusEvents.map((event) => ({ status: event.status, at: event.createdAt.toISOString(), reason: event.reason, actorName: event.actorName })),
     };

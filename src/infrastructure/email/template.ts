@@ -24,13 +24,13 @@ export function renderEmail(to: string, language: Language, template: EmailTempl
     to,
     subject: template.subject,
     text: [template.greeting, ...paragraphs, ...(button ? [`${template.action}: ${link}`] : []), template.footer].join('\n\n'),
-    html: `<!doctype html><html lang="${language}" dir="${dir}"><body style="margin:0;background:#fff8ef;font-family:Arial,sans-serif;color:#242b29">
+    html: `<!doctype html><html lang="${language}" dir="${dir}"><body style="margin:0;background:#fff3e7;font-family:Arial,sans-serif;color:#35172f">
 <div style="max-width:520px;margin:0 auto;padding:32px 24px">
-<p style="font-size:20px;font-weight:bold;color:#075e54;margin:0 0 24px">Bilhanah · بالهنا</p>
+<p style="font-size:20px;font-weight:bold;color:#35172f;margin:0 0 24px">Bilhanah · بالهنا</p>
 <p>${escapeHtml(template.greeting)}</p>
 ${paragraphs.map((paragraph) => `<p style="line-height:1.7">${escapeHtml(paragraph)}</p>`).join('\n')}
-${button ? `<p style="margin:28px 0"><a href="${escapeHtml(link)}" style="background:#075e54;color:#fff;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:bold">${escapeHtml(template.action!)}</a></p>` : ''}
-<p style="color:#606c65;font-size:13px;line-height:1.6">${escapeHtml(template.footer)}</p>
+${button ? `<p style="margin:28px 0"><a href="${escapeHtml(link)}" style="background:#f45164;color:#35172f;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:bold">${escapeHtml(template.action!)}</a></p>` : ''}
+<p style="color:#76646f;font-size:13px;line-height:1.6">${escapeHtml(template.footer)}</p>
 </div></body></html>`,
   };
 }

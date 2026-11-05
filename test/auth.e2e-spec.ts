@@ -251,6 +251,33 @@ describe('sessions', () => {
     await refresh(refreshCookie(refreshed)).expect(401);
   });
 
+  it('"keep me signed in" lasts 14 days from sign-in, and survives refreshes', async () => {
+    const remembered = await http().post('/v1/auth/login').set('Origin', DASHBOARD_ORIGIN)
+      .send({ email: EMAIL, password: PASSWORD, remember: true }).expect(200);
+    const [session] = await t.prisma.session.findMany();
+    expect(session!.remember).toBe(true);
+    expect(session!.expiresAt.getTime() - session!.createdAt.getTime()).toBe(14 * 24 * 60 * 60 * 1000);
+    const refreshed = await refresh(refreshCookie(remembered)).expect(200);
+    const maxAge = Number(/Max-Age=(\d+)/.exec(refreshCookie(refreshed))?.[1]);
+    expect(maxAge).toBeGreaterThan(14 * 86_400 - 60);
+    expect(maxAge).toBeLessThanOrEqual(14 * 86_400);
+
+    // Past day 14 the session is over.
+    await t.prisma.session.update({ where: { id: session!.id }, data: { createdAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000) } });
+    await refresh(refreshCookie(refreshed)).expect(401);
+  });
+
+  it('without "keep me signed in" the cookie ends with the browser and the session within a day', async () => {
+    const loggedIn = await http().post('/v1/auth/login').set('Origin', DASHBOARD_ORIGIN)
+      .send({ email: EMAIL, password: PASSWORD, remember: false }).expect(200);
+    expect(refreshCookie(loggedIn)).not.toMatch(/Max-Age|Expires/i);
+    const [session] = await t.prisma.session.findMany();
+    expect(session!.remember).toBe(false);
+    expect(session!.expiresAt.getTime() - session!.createdAt.getTime()).toBe(24 * 60 * 60 * 1000);
+    const refreshed = await refresh(refreshCookie(loggedIn)).expect(200);
+    expect(refreshCookie(refreshed)).not.toMatch(/Max-Age|Expires/i);
+  });
+
   it('logout ends the session and clears the cookie', async () => {
     const loggedIn = await login().expect(200);
     const cookie = refreshCookie(loggedIn);

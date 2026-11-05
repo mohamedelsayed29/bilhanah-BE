@@ -45,6 +45,8 @@ export const envSchema = z.object({
   SESSION_MAX_DAYS: z.coerce.number().int().min(1).max(365).default(90),
   /** Administrator sessions end this many hours after sign-in, however often refreshed. */
   ADMIN_SESSION_HOURS: z.coerce.number().int().min(1).max(72).default(12),
+  /** "Keep me signed in" on the restaurant dashboard: how long the session lasts from sign-in. */
+  REMEMBER_ME_DAYS: z.coerce.number().int().min(1).max(90).default(14),
   /** Encrypts administrators' authenticator secrets. Defaults to a key derived from JWT_ACCESS_SECRET. */
   DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
   DASHBOARD_URL: z.url(),

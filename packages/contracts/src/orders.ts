@@ -6,6 +6,7 @@ import { languageSchema } from './common.js';
 import { isPushServiceEndpoint } from './push.js';
 import { ORDER_PREP_MINUTES, type OrderingSettings } from './restaurants.js';
 import { BRANCH_SLUG_PATTERN } from './branches.js';
+import { ORDER_PAYMENT_METHODS, type OrderPaymentMethod } from './cash.js';
 
 export const ORDER_TYPES = ['DINE_IN', 'PICKUP'] as const;
 export type OrderType = (typeof ORDER_TYPES)[number];
@@ -125,7 +126,14 @@ export const updateOrderStatusSchema = z
   });
 
 /** PATCH /v1/orders/:id/payment: the bill was paid (or the mark was a mistake). */
-export const updateOrderPaymentSchema = z.strictObject({ paid: z.boolean() });
+export const updateOrderPaymentSchema = z.strictObject({
+  paid: z.boolean(),
+  /** How the bill was paid (when marking it paid). Cash goes into the caller's open cash shift. */
+  method: z.enum(ORDER_PAYMENT_METHODS).default('CASH'),
+});
+
+/** POST /v1/orders/tables/:tableId/settle: how the table paid. */
+export const settleTableSchema = z.strictObject({ method: z.enum(ORDER_PAYMENT_METHODS).default('CASH') }).default({ method: 'CASH' });
 
 export const ordersQuerySchema = z.object({
   /** active: the board (oldest first). history: closed orders (newest first). */
@@ -160,6 +168,8 @@ export type OrderLine = {
   prepStatus: OrderItemStatus;
   startedAt: string | null;
   readyAt: string | null;
+  /** The guest who added it in a shared table session; null otherwise. */
+  guestName: string | null;
 };
 
 type OrderCore = {
@@ -204,6 +214,8 @@ export type OwnerOrder = Omit<OrderCore, 'history'> & {
   notifiesDiner: boolean;
   /** RUSH orders go first on the kitchen display. */
   priority: OrderPriority;
+  /** How the bill was paid; null while unpaid. */
+  paymentMethod: OrderPaymentMethod | null;
 };
 
 /** An order as the diner sees it on the tracking page. */

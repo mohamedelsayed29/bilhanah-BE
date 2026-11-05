@@ -18,6 +18,8 @@ const PASSWORD = 'demo-password-1';
 const SUBDOMAIN = 'koshary-demo';
 const KITCHEN_EMAIL = 'demo-kitchen@bilhanah.local';
 const KITCHEN_PASSWORD = 'demo-kitchen-1';
+const CASHIER_EMAIL = 'demo-cashier@bilhanah.local';
+const CASHIER_PASSWORD = 'demo-cashier-1';
 const MEDIA = resolve(import.meta.dirname, 'demo-media');
 const reset = process.argv.includes('--reset');
 
@@ -151,6 +153,13 @@ if (!kitchens.some((account) => account.email === KITCHEN_EMAIL)) {
   console.log('Creating the demo kitchen account…');
   await api('POST', '/kitchen-accounts', { fullName: 'المطبخ', email: KITCHEN_EMAIL, password: KITCHEN_PASSWORD });
 }
+// A cashier for the cash-shift screens (with refunds and adjustments, so every drawer action shows).
+if (!kitchens.some((account) => account.email === CASHIER_EMAIL)) {
+  console.log('Creating the demo cashier account…');
+  await api('POST', '/kitchen-accounts', {
+    fullName: 'كاشير تجريبي', email: CASHIER_EMAIL, password: CASHIER_PASSWORD, role: 'CASHIER', permissions: ['payments.refund', 'cash.adjust'],
+  });
+}
 
 // A second branch, so multi-branch screens have something to show: its own
 // tables (copied from the main branch), ordering on, and one dish priced differently.
@@ -182,4 +191,4 @@ if (!nasr && branchList.used < branchList.limit) {
 }
 
 const restaurant = (await api('GET', '/restaurants/mine')).data;
-console.log(`\nDemo menu: ${restaurant.publicUrl}${nasr ? `\nNasr City branch: ${restaurant.publicUrl}/?b=nasr-city` : ''}\nOwner login: ${EMAIL} / ${PASSWORD}\nKitchen login: ${KITCHEN_EMAIL} / ${KITCHEN_PASSWORD}`);
+console.log(`\nDemo menu: ${restaurant.publicUrl}${nasr ? `\nNasr City branch: ${restaurant.publicUrl}/?b=nasr-city` : ''}\nOwner login: ${EMAIL} / ${PASSWORD}\nKitchen login: ${KITCHEN_EMAIL} / ${KITCHEN_PASSWORD}\nCashier login: ${CASHIER_EMAIL} / ${CASHIER_PASSWORD}`);

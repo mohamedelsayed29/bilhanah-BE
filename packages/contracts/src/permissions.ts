@@ -65,6 +65,16 @@ export const PERMISSIONS = [
   'attendance.approve',
   /** Attendance methods and rules. */
   'attendance.settings',
+  /** Opening and closing one's own cash shift, cash in and out of one's drawer. */
+  'cash.operate',
+  /** Manual adjustments to a drawer (with a reason; may need approval). */
+  'cash.adjust',
+  /** Every shift, reconciliation history and cash reports. */
+  'cash.view',
+  /** Reviewing discrepancies and adjustments, correcting closed shifts. */
+  'cash.approve',
+  /** Registers and the reconciliation rules. */
+  'cash.settings',
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -97,21 +107,22 @@ const MANAGER: Permission[] = [
   'payments.view', 'payments.process', 'service.view', 'service.manage', 'promotions.manage',
   'analytics.view', 'analytics.financial', 'staff.view', 'staff.manage', 'roles.assign', 'settings.operational', 'kitchen.view',
   'attendance.view',
+  'cash.operate', 'cash.adjust', 'cash.view', 'cash.approve',
 ];
 
 /** What each role may do by default. */
 export const ROLE_PERMISSIONS: Record<RestaurantRole, readonly Permission[]> = {
   OWNER: PERMISSIONS,
   MANAGER,
-  CASHIER: ['dashboard.view', 'menu.view', 'orders.view', 'orders.complete', 'tables.view', 'payments.view', 'payments.process'],
+  CASHIER: ['dashboard.view', 'menu.view', 'orders.view', 'orders.complete', 'tables.view', 'payments.view', 'payments.process', 'cash.operate'],
   WAITER: ['menu.view', 'orders.view', 'orders.create', 'tables.view', 'reservations.view', 'reservations.manage', 'service.view', 'service.manage'],
   KITCHEN: ['kitchen.view', 'menu.availability', 'orders.view', 'orders.update', 'orders.complete', 'orders.cancel'],
 };
 
 /** The extra permissions each staff role may be granted, on top of its defaults. */
 export const GRANTABLE_PERMISSIONS: Record<StaffRole, readonly Permission[]> = {
-  MANAGER: ['payments.refund', 'attendance.manage', 'attendance.approve'],
-  CASHIER: ['payments.refund'],
+  MANAGER: ['payments.refund', 'attendance.manage', 'attendance.approve', 'cash.settings'],
+  CASHIER: ['payments.refund', 'cash.adjust', 'cash.view'],
   WAITER: ['orders.complete'],
   KITCHEN: [],
 };
@@ -194,4 +205,9 @@ export const PERMISSION_LABELS: Record<Permission, [string, string]> = {
   'attendance.manage': ['يدير الموظفين والشيفتات والحضور', 'Manage employees, shifts and attendance'],
   'attendance.approve': ['يوافق على تصحيحات الحضور', 'Approve attendance corrections'],
   'attendance.settings': ['إعدادات الحضور', 'Attendance settings'],
+  'cash.operate': ['يفتح ويقفل شيفت الكاشير', 'Open and close cash shifts'],
+  'cash.adjust': ['يعمل تسويات في الدرج', 'Adjust the cash drawer'],
+  'cash.view': ['يشوف شيفتات وتقارير الكاش', 'View cash shifts and reports'],
+  'cash.approve': ['يوافق على فروقات وتسويات الكاش', 'Approve cash discrepancies and adjustments'],
+  'cash.settings': ['إعدادات الخزن والكاش', 'Cash registers and rules'],
 };

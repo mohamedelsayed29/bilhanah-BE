@@ -102,7 +102,7 @@ describe('placing orders', () => {
   it('only takes orders once the owner switches ordering on', async () => {
     const menu = await restaurantWithMenu();
     await http().patch('/v1/restaurants/mine').set(auth(menu.token)).send({ orderingEnabled: false }).expect(200);
-    expect((await http().get('/v1/public/restaurants/koshary').expect(200)).body.ordering).toEqual({ accepting: false, dineIn: true, pickup: true, serviceRequests: true });
+    expect((await http().get('/v1/public/restaurants/koshary').expect(200)).body.ordering).toEqual({ accepting: false, dineIn: true, pickup: true, serviceRequests: true, sharedTable: false });
     const refused = await placeOrder(menu).expect(409);
     expect(refused.body.error.code).toBe('ORDERING_UNAVAILABLE');
 

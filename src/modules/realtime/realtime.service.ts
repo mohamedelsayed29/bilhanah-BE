@@ -1,6 +1,8 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap, type OnApplicationShutdown } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
 import {
+  TABLE_SESSION_EVENTS,
+  type TableSessionUpdatedEvent,
   STAFF_ROLES,
   type OwnerOrder,
   type OwnerServiceRequest,
@@ -104,6 +106,11 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
     const event = kind === 'created' ? SERVICE_REQUEST_EVENTS.CREATED : SERVICE_REQUEST_EVENTS.UPDATED;
     this.owners?.to([restaurantRoom(restaurantId), branchRoom(ownerView.branchId)]).emit(event, { request: ownerView } satisfies ServiceRequestEvent);
     this.tables?.to(tableSessionRoom(sessionId)).emit(event, { request: publicView } satisfies TableServiceEvent);
+  }
+
+  /** Something changed in a shared table session (dishes, guests, status): its guests fetch it again. */
+  emitTableSession(sessionId: string, event: TableSessionUpdatedEvent): void {
+    this.tables?.to(tableSessionRoom(sessionId)).emit(TABLE_SESSION_EVENTS.UPDATED, event);
   }
 
   emitOrderCreated(restaurantId: string, order: OwnerOrder): void {

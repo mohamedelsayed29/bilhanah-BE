@@ -11,6 +11,7 @@ import {
   type Paginated,
   type TableOccupancy,
   updateOrderPaymentSchema,
+  settleTableSchema,
   placeOrderSchema,
   type PlaceOrderResponse,
   type PublicOrder,
@@ -71,8 +72,12 @@ export class OrdersController {
   @RequirePermission('payments.process')
   @HttpCode(HttpStatus.OK)
   @RateLimit({ name: 'order-status:ip', limit: 600, windowSeconds: 60, by: 'ip' })
-  settleTable(@CurrentAuth() auth: AuthContext, @Param('tableId', new ZodValidationPipe(orderIdParamSchema)) tableId: string): Promise<TableOccupancy[]> {
-    return this.orders.settleTable(auth.userId, tableId);
+  settleTable(
+    @CurrentAuth() auth: AuthContext,
+    @Param('tableId', new ZodValidationPipe(orderIdParamSchema)) tableId: string,
+    @Body(new ZodValidationPipe(settleTableSchema)) body: z.output<typeof settleTableSchema>,
+  ): Promise<TableOccupancy[]> {
+    return this.orders.settleTable(auth.userId, tableId, body.method);
   }
 
   @Get(':id')
@@ -132,7 +137,7 @@ export class OrdersController {
     @Param('id', new ZodValidationPipe(orderIdParamSchema)) id: string,
     @Body(new ZodValidationPipe(updateOrderPaymentSchema)) body: z.output<typeof updateOrderPaymentSchema>,
   ): Promise<OwnerOrder> {
-    return this.orders.setPaid(auth.userId, id, body.paid);
+    return this.orders.setPaid(auth.userId, id, body.paid, body.method);
   }
 }
 

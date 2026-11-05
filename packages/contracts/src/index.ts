@@ -25,3 +25,5 @@ export * from './service-requests.js';
 export * from './recommendations.js';
 export * from './kitchen-display.js';
 export * from './attendance.js';
+export * from './cash.js';
+export * from './table-sessions.js';

@@ -13,8 +13,8 @@ export const ICON_SIZES = [180, 192, 512] as const;
 export type IconSize = (typeof ICON_SIZES)[number];
 
 /** The brand colors of the website (bilhanah-client-FE: src/styles/global.css). */
-const TEAL = '#075e54';
-const IVORY = '#fff8ef';
+const BRAND = '#f45164';
+const CREAM = '#fff3e7';
 /** The art fills this share of the icon, which keeps it inside the maskable safe zone (80%). */
 const ART_SCALE = 0.72;
 const ICON_CACHE_SECONDS = 7 * 24 * 60 * 60;
@@ -76,8 +76,8 @@ export class PwaService {
       start_url: `${site}${startPath(start)}`,
       scope: `${site}/`,
       display: 'standalone',
-      background_color: IVORY,
-      theme_color: restaurant.brandColor ?? TEAL,
+      background_color: CREAM,
+      theme_color: restaurant.brandColor ?? BRAND,
       icons: [
         { src: icon(192), sizes: '192x192', type: 'image/png', purpose: 'any' },
         { src: icon(512), sizes: '512x512', type: 'image/png', purpose: 'any' },

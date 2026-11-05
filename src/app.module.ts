@@ -33,6 +33,8 @@ import { ServiceRequestsModule } from './modules/service-requests/service-reques
 import { RecommendationsModule } from './modules/recommendations/recommendations.module.js';
 import { KitchenDisplayModule } from './modules/kitchen-display/kitchen-display.module.js';
 import { AttendanceModule } from './modules/attendance/attendance.module.js';
+import { CashModule } from './modules/cash/cash.module.js';
+import { TableSessionsModule } from './modules/table-sessions/table-sessions.module.js';
 
 @Module({
   imports: [
@@ -62,6 +64,8 @@ import { AttendanceModule } from './modules/attendance/attendance.module.js';
     RecommendationsModule,
     KitchenDisplayModule,
     AttendanceModule,
+    CashModule,
+    TableSessionsModule,
     OrdersModule,
     KitchenModule,
     PwaModule,

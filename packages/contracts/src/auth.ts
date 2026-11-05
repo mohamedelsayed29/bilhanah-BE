@@ -32,6 +32,8 @@ export const loginSchema = z.object({
   email: emailSchema,
   // Not checked against the password policy, so a policy change never locks anyone out.
   password: z.string().min(1).max(128),
+  /** "Keep me signed in": true for REMEMBER_ME_DAYS (14), false until the browser closes. Omitted: the standard session. */
+  remember: z.boolean().optional(),
 });
 
 export const emailOnlySchema = z.object({ email: emailSchema });

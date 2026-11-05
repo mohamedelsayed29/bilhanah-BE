@@ -59,7 +59,7 @@ export function toXls(table: Table, sheet: string, rtl: boolean): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <?mso-application progid="Excel.Sheet"?>
 <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
-<Styles><Style ss:ID="head"><Font ss:Bold="1"/><Interior ss:Color="#E6F0EC" ss:Pattern="Solid"/></Style></Styles>
+<Styles><Style ss:ID="head"><Font ss:Bold="1"/><Interior ss:Color="#FFF3E7" ss:Pattern="Solid"/></Style></Styles>
 <Worksheet ss:Name="${escape(sheet).slice(0, 31)}"><Table>
 <Row>${table.headers.map((header) => cell(header, ' ss:StyleID="head"')).join('')}</Row>
 ${table.rows.map((row) => `<Row>${row.map((value) => cell(value)).join('')}</Row>`).join('\n')}

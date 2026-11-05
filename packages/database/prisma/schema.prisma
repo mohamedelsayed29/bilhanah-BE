@@ -95,22 +95,27 @@ model User {
   createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  sessions                Session[]
-  emailVerificationTokens EmailVerificationToken[]
-  passwordResetTokens     PasswordResetToken[]
-  restaurant              Restaurant?
-  staffRestaurant         Restaurant?              @relation("RestaurantStaff", fields: [staffRestaurantId], references: [id], onDelete: Cascade)
-  staffBranch             Branch?                  @relation("BranchStaff", fields: [staffBranchId], references: [id], onDelete: Cascade)
-  reviewedPayments        SubscriptionPayment[]
-  standOrderEvents        StandOrderEvent[]
-  grantedEntitlements     Entitlement[]
-  auditLogs               AuditLog[]
-  assignedServiceRequests ServiceRequest[]         @relation("ServiceRequestAssignee")
-  handledServiceRequests  ServiceRequest[]         @relation("ServiceRequestHandler")
-  orderStatusEvents       OrderStatusEvent[]
-  orderItemEvents         OrderItemEvent[]
-  employee                Employee?
-  attendanceReviews       AttendanceCorrection[]   @relation("AttendanceReviewer")
+  sessions                 Session[]
+  emailVerificationTokens  EmailVerificationToken[]
+  passwordResetTokens      PasswordResetToken[]
+  restaurant               Restaurant?
+  staffRestaurant          Restaurant?              @relation("RestaurantStaff", fields: [staffRestaurantId], references: [id], onDelete: Cascade)
+  staffBranch              Branch?                  @relation("BranchStaff", fields: [staffBranchId], references: [id], onDelete: Cascade)
+  reviewedPayments         SubscriptionPayment[]
+  standOrderEvents         StandOrderEvent[]
+  grantedEntitlements      Entitlement[]
+  auditLogs                AuditLog[]
+  assignedServiceRequests  ServiceRequest[]         @relation("ServiceRequestAssignee")
+  handledServiceRequests   ServiceRequest[]         @relation("ServiceRequestHandler")
+  orderStatusEvents        OrderStatusEvent[]
+  orderItemEvents          OrderItemEvent[]
+  employee                 Employee?
+  attendanceReviews        AttendanceCorrection[]   @relation("AttendanceReviewer")
+  cashShifts               CashShift[]              @relation("CashShiftCashier")
+  closedCashShifts         CashShift[]              @relation("CashShiftCloser")
+  reviewedCashShifts       CashShift[]              @relation("CashShiftReviewer")
+  cashTransactions         CashTransaction[]        @relation("CashTransactionCreator")
+  approvedCashTransactions CashTransaction[]        @relation("CashTransactionApprover")
 
   @@index([staffRestaurantId])
   @@index([staffBranchId])
@@ -128,6 +133,8 @@ model Session {
   revokedReason SessionRevokedReason? @map("revoked_reason")
   userAgent     String?               @map("user_agent") @db.VarChar(512)
   ipAddress     String?               @map("ip_address") @db.VarChar(64)
+  /// "Keep me signed in": true for REMEMBER_ME_DAYS, false until the browser closes (at most a day), null for the standard sliding session.
+  remember      Boolean?
   createdAt     DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -183,6 +190,10 @@ model Restaurant {
   /// and a table sends at most this many requests an hour.
   serviceRequestCooldownSeconds Int              @default(120) @map("service_request_cooldown_seconds")
   serviceRequestHourlyLimit     Int              @default(20) @map("service_request_hourly_limit")
+  /// Shared table sessions: the guests at a scanned table build one order together.
+  tableSessionsEnabled          Boolean          @default(true) @map("table_sessions_enabled")
+  /// Guests may change and remove each other's unsent dishes (otherwise only their own).
+  tableSessionSharedEditing     Boolean          @default(false) @map("table_session_shared_editing")
   /// Usual minutes from accepting an order to ready, shown to diners as an estimate; null shows none.
   orderPrepMinutes              Int?             @map("order_prep_minutes")
   whatsappNumber                String?          @map("whatsapp_number")
@@ -230,6 +241,10 @@ model Restaurant {
   attendanceRecords     AttendanceRecord[]
   attendanceKiosks      AttendanceKiosk[]
   attendanceCorrections AttendanceCorrection[]
+  cashSettings          CashSettings?
+  cashRegisters         CashRegister[]
+  cashShifts            CashShift[]
+  cashTransactions      CashTransaction[]
 
   @@map("restaurants")
 }
@@ -283,6 +298,9 @@ model Branch {
   shifts               Shift[]
   attendanceRecords    AttendanceRecord[]
   attendanceKiosks     AttendanceKiosk[]
+  cashRegisters        CashRegister[]
+  cashShifts           CashShift[]
+  cashTransactions     CashTransaction[]
 
   @@unique([restaurantId, slug])
   @@index([restaurantId, sortOrder])
@@ -809,21 +827,31 @@ enum ServiceRequestStatus {
 /// The guests at one table, from the first scan until the bill is settled (or it goes idle).
 /// Everyone at the table shares it; their service requests belong to it.
 model TableSession {
-  id             String    @id @default(uuid()) @db.Uuid
-  restaurantId   String    @map("restaurant_id") @db.Uuid
-  branchId       String    @map("branch_id") @db.Uuid
-  tableId        String    @map("table_id") @db.Uuid
-  startedAt      DateTime  @default(now()) @map("started_at") @db.Timestamptz(3)
-  lastActivityAt DateTime  @default(now()) @map("last_activity_at") @db.Timestamptz(3)
-  endedAt        DateTime? @map("ended_at") @db.Timestamptz(3)
+  id             String                   @id @default(uuid()) @db.Uuid
+  restaurantId   String                   @map("restaurant_id") @db.Uuid
+  branchId       String                   @map("branch_id") @db.Uuid
+  tableId        String                   @map("table_id") @db.Uuid
+  /// At most one session that is not CLOSED per table (partial unique index in SQL).
+  status         TableSessionStatus       @default(ACTIVE)
+  closedReason   TableSessionCloseReason? @map("closed_reason")
+  startedAt      DateTime                 @default(now()) @map("started_at") @db.Timestamptz(3)
+  lastActivityAt DateTime                 @default(now()) @map("last_activity_at") @db.Timestamptz(3)
+  /// Set with status CLOSED.
+  endedAt        DateTime?                @map("ended_at") @db.Timestamptz(3)
+  /// Bumped on every change to its guests, dishes or status.
+  version        Int                      @default(0)
 
   restaurant Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   branch     Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
   table      Table            @relation(fields: [tableId], references: [id], onDelete: Cascade)
   requests   ServiceRequest[]
+  guests     TableGuest[]
+  cartItems  TableCartItem[]
+  orders     Order[]
 
   @@index([tableId, endedAt])
   @@index([restaurantId])
+  @@index([branchId, status])
   @@map("table_sessions")
 }
 
@@ -923,42 +951,46 @@ enum OrderStatus {
 
 /// An order placed by a diner. Names and prices are copied at placement, so menu edits never change it.
 model Order {
-  id               String        @id @default(uuid()) @db.Uuid
-  restaurantId     String        @map("restaurant_id") @db.Uuid
+  id               String              @id @default(uuid()) @db.Uuid
+  restaurantId     String              @map("restaurant_id") @db.Uuid
   /// The branch that receives and prepares the order.
-  branchId         String        @map("branch_id") @db.Uuid
+  branchId         String              @map("branch_id") @db.Uuid
   /// Daily sequence per branch (restaurant time zone): #1, #2, ...
   number           Int
   /// The restaurant's local date the number belongs to.
-  businessDay      DateTime      @map("business_day") @db.Date
+  businessDay      DateTime            @map("business_day") @db.Date
   type             OrderType
-  tableId          String?       @map("table_id") @db.Uuid
+  tableId          String?             @map("table_id") @db.Uuid
   /// Kept even if the table is renamed or deleted.
-  tableLabel       String?       @map("table_label") @db.VarChar(40)
-  customerName     String        @map("customer_name") @db.VarChar(60)
-  customerPhone    String?       @map("customer_phone") @db.VarChar(20)
-  note             String?       @db.VarChar(300)
-  status           OrderStatus   @default(PLACED)
-  subtotalPiastres Int           @map("subtotal_piastres")
+  tableLabel       String?             @map("table_label") @db.VarChar(40)
+  customerName     String              @map("customer_name") @db.VarChar(60)
+  customerPhone    String?             @map("customer_phone") @db.VarChar(20)
+  note             String?             @db.VarChar(300)
+  status           OrderStatus         @default(PLACED)
+  subtotalPiastres Int                 @map("subtotal_piastres")
   /// Client-generated key; a retried submission returns the same order.
-  idempotencyKey   String        @map("idempotency_key") @db.VarChar(64)
-  rejectionReason  String?       @map("rejection_reason") @db.VarChar(300)
-  placedAt         DateTime      @default(now()) @map("placed_at") @db.Timestamptz(3)
-  acceptedAt       DateTime?     @map("accepted_at") @db.Timestamptz(3)
-  readyAt          DateTime?     @map("ready_at") @db.Timestamptz(3)
-  completedAt      DateTime?     @map("completed_at") @db.Timestamptz(3)
-  closedAt         DateTime?     @map("closed_at") @db.Timestamptz(3)
+  idempotencyKey   String              @map("idempotency_key") @db.VarChar(64)
+  rejectionReason  String?             @map("rejection_reason") @db.VarChar(300)
+  placedAt         DateTime            @default(now()) @map("placed_at") @db.Timestamptz(3)
+  acceptedAt       DateTime?           @map("accepted_at") @db.Timestamptz(3)
+  readyAt          DateTime?           @map("ready_at") @db.Timestamptz(3)
+  completedAt      DateTime?           @map("completed_at") @db.Timestamptz(3)
+  closedAt         DateTime?           @map("closed_at") @db.Timestamptz(3)
   /// The restaurant marked the bill paid. A dine-in order not yet paid keeps its table occupied.
-  paidAt           DateTime?     @map("paid_at") @db.Timestamptz(3)
+  paidAt           DateTime?           @map("paid_at") @db.Timestamptz(3)
+  /// How the bill was paid; null while unpaid. Only CASH reaches a cashier's drawer.
+  paymentMethod    OrderPaymentMethod? @map("payment_method")
+  /// The shared table session it was sent from (or that was open at the table when placed).
+  tableSessionId   String?             @map("table_session_id") @db.Uuid
   /// When the diner can expect it ready, set by the restaurant on accepting (or while preparing).
-  estimatedReadyAt DateTime?     @map("estimated_ready_at") @db.Timestamptz(3)
+  estimatedReadyAt DateTime?           @map("estimated_ready_at") @db.Timestamptz(3)
   /// The first time the diner opened the tracking page (for tracking usage).
-  trackedAt        DateTime?     @map("tracked_at") @db.Timestamptz(3)
+  trackedAt        DateTime?           @map("tracked_at") @db.Timestamptz(3)
   /// A "ready" notification reached at least one of the diner's browsers.
-  readyNotifiedAt  DateTime?     @map("ready_notified_at") @db.Timestamptz(3)
+  readyNotifiedAt  DateTime?           @map("ready_notified_at") @db.Timestamptz(3)
   /// Rush orders go to the top of the kitchen display.
-  priority         OrderPriority @default(NORMAL)
-  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  priority         OrderPriority       @default(NORMAL)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   restaurant        Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   branch            Branch             @relation(fields: [branchId], references: [id], onDelete: Cascade)
@@ -967,6 +999,9 @@ model Order {
   pushSubscriptions PushSubscription[]
   statusEvents      OrderStatusEvent[]
   itemEvents        OrderItemEvent[]
+  cashTransactions  CashTransaction[]
+  tableSession      TableSession?      @relation(fields: [tableSessionId], references: [id], onDelete: SetNull)
+  tableCartItems    TableCartItem[]
 
   @@unique([restaurantId, idempotencyKey])
   @@unique([branchId, businessDay, number])
@@ -974,6 +1009,7 @@ model Order {
   @@index([restaurantId, placedAt])
   @@index([branchId, status, placedAt])
   @@index([branchId, tableId, paidAt])
+  @@index([tableSessionId])
   @@map("orders")
 }
 
@@ -1003,8 +1039,12 @@ model OrderItem {
   readyAt                 DateTime?                @map("ready_at") @db.Timestamptz(3)
   servedAt                DateTime?                @map("served_at") @db.Timestamptz(3)
   cancelledAt             DateTime?                @map("cancelled_at") @db.Timestamptz(3)
+  /// Who added it in a shared table session; the name is a copy.
+  guestId                 String?                  @map("guest_id") @db.Uuid
+  guestName               String?                  @map("guest_name") @db.VarChar(30)
 
   order              Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  guest              TableGuest?         @relation(fields: [guestId], references: [id], onDelete: SetNull)
   menuItem           MenuItem?           @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
   recommendationRule RecommendationRule? @relation(fields: [recommendationRuleId], references: [id], onDelete: SetNull)
   station            KitchenStation?     @relation(fields: [stationId], references: [id], onDelete: SetNull)
@@ -1583,4 +1623,253 @@ model AttendanceCorrection {
   @@index([restaurantId, status])
   @@index([employeeId])
   @@map("attendance_corrections")
+}
+
+// --- Cashier shifts and cash reconciliation --------------------------------------------------------
+
+enum OrderPaymentMethod {
+  CASH
+  CARD
+  WALLET
+  OTHER
+
+  @@map("order_payment_method")
+}
+
+enum CashShiftStatus {
+  OPEN
+  /// The cashier is counting: no new cash movements; back to OPEN or on to CLOSED.
+  CLOSING
+  CLOSED
+
+  @@map("cash_shift_status")
+}
+
+enum CashReviewStatus {
+  NOT_REQUIRED
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("cash_review_status")
+}
+
+enum CashTransactionKind {
+  SALE
+  REFUND
+  CASH_IN
+  CASH_OUT
+  ADJUSTMENT
+  CORRECTION
+
+  @@map("cash_transaction_kind")
+}
+
+enum CashApprovalStatus {
+  APPROVED
+  PENDING
+  REJECTED
+
+  @@map("cash_approval_status")
+}
+
+enum ClosingNoteRule {
+  NEVER
+  ON_DISCREPANCY
+  ALWAYS
+
+  @@map("closing_note_rule")
+}
+
+/// A restaurant's reconciliation rules (defaults when missing: contracts DEFAULT_CASH_SETTINGS).
+model CashSettings {
+  restaurantId                 String          @id @map("restaurant_id") @db.Uuid
+  allowSharedRegister          Boolean         @default(false) @map("allow_shared_register")
+  requireShiftForCash          Boolean         @default(false) @map("require_shift_for_cash")
+  adjustmentsNeedApproval      Boolean         @default(true) @map("adjustments_need_approval")
+  discrepancyTolerancePiastres Int             @default(0) @map("discrepancy_tolerance_piastres")
+  closingNote                  ClosingNoteRule @default(ON_DISCREPANCY) @map("closing_note")
+  /// ISO 4217; every price in Bilhanah is in Egyptian piastres today.
+  currency                     String          @default("EGP") @db.Char(3)
+  updatedById                  String?         @map("updated_by_id") @db.Uuid
+  updatedAt                    DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@map("cash_settings")
+}
+
+/// A cash drawer at a branch. Archived registers keep their shifts.
+model CashRegister {
+  id           String   @id @default(uuid()) @db.Uuid
+  restaurantId String   @map("restaurant_id") @db.Uuid
+  branchId     String   @map("branch_id") @db.Uuid
+  name         String   @db.VarChar(40)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch     Branch      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  shifts     CashShift[]
+
+  @@unique([branchId, name])
+  @@index([restaurantId])
+  @@map("cash_registers")
+}
+
+/// One cashier's shift on a drawer, from the opening cash to the count at closing.
+/// At most one active (OPEN or CLOSING) shift per cashier (partial unique index in SQL).
+model CashShift {
+  id                  String            @id @default(uuid()) @db.Uuid
+  restaurantId        String            @map("restaurant_id") @db.Uuid
+  branchId            String            @map("branch_id") @db.Uuid
+  registerId          String?           @map("register_id") @db.Uuid
+  /// Null once the account is deleted; cashierName keeps who it was.
+  cashierId           String?           @map("cashier_id") @db.Uuid
+  cashierName         String            @map("cashier_name") @db.VarChar(100)
+  status              CashShiftStatus   @default(OPEN)
+  currency            String            @default("EGP") @db.Char(3)
+  openingPiastres     Int               @map("opening_piastres")
+  openingNote         String?           @map("opening_note") @db.VarChar(500)
+  openedAt            DateTime          @default(now()) @map("opened_at") @db.Timestamptz(3)
+  closingStartedAt    DateTime?         @map("closing_started_at") @db.Timestamptz(3)
+  closedAt            DateTime?         @map("closed_at") @db.Timestamptz(3)
+  closedById          String?           @map("closed_by_id") @db.Uuid
+  /// Frozen at closing (and recalculated by corrections).
+  expectedPiastres    Int?              @map("expected_piastres")
+  countedPiastres     Int?              @map("counted_piastres")
+  /// counted − expected: negative is a shortage.
+  discrepancyPiastres Int?              @map("discrepancy_piastres")
+  closingNote         String?           @map("closing_note") @db.VarChar(500)
+  reviewStatus        CashReviewStatus? @map("review_status")
+  reviewedById        String?           @map("reviewed_by_id") @db.Uuid
+  reviewedAt          DateTime?         @map("reviewed_at") @db.Timestamptz(3)
+  reviewNote          String?           @map("review_note") @db.VarChar(500)
+  /// Bumped on every change, for optimistic concurrency.
+  version             Int               @default(0)
+  createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant   Restaurant        @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch       Branch            @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  register     CashRegister?     @relation(fields: [registerId], references: [id], onDelete: SetNull)
+  cashier      User?             @relation("CashShiftCashier", fields: [cashierId], references: [id], onDelete: SetNull)
+  closedBy     User?             @relation("CashShiftCloser", fields: [closedById], references: [id], onDelete: SetNull)
+  reviewedBy   User?             @relation("CashShiftReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  transactions CashTransaction[]
+
+  @@index([restaurantId, openedAt])
+  @@index([branchId, status])
+  @@index([cashierId, openedAt])
+  @@index([registerId, status])
+  @@map("cash_shifts")
+}
+
+/// A movement of cash in a shift's drawer. Payments and refunds of a bill carry a source key
+/// (unique), so a retried or concurrent request is never counted twice.
+model CashTransaction {
+  id             String              @id @default(uuid()) @db.Uuid
+  restaurantId   String              @map("restaurant_id") @db.Uuid
+  branchId       String              @map("branch_id") @db.Uuid
+  shiftId        String              @map("shift_id") @db.Uuid
+  kind           CashTransactionKind
+  /// Positive, except ADJUSTMENT and CORRECTION which are signed.
+  amountPiastres Int                 @map("amount_piastres")
+  reason         String?             @db.VarChar(300)
+  orderId        String?             @map("order_id") @db.Uuid
+  /// "order:{id}:sale:{paidAt ms}" and the like; null for manual movements.
+  sourceKey      String?             @unique @map("source_key") @db.VarChar(120)
+  approvalStatus CashApprovalStatus  @default(APPROVED) @map("approval_status")
+  approvedById   String?             @map("approved_by_id") @db.Uuid
+  approvedAt     DateTime?           @map("approved_at") @db.Timestamptz(3)
+  createdById    String?             @map("created_by_id") @db.Uuid
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  shift      CashShift  @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  order      Order?     @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  createdBy  User?      @relation("CashTransactionCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedBy User?      @relation("CashTransactionApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([shiftId, createdAt])
+  @@index([restaurantId, approvalStatus])
+  @@index([orderId])
+  @@map("cash_transactions")
+}
+
+// --- Shared table sessions ---------------------------------------------------------------------------
+
+enum TableSessionStatus {
+  ACTIVE
+  /// The table asked for the bill: no new dishes until the staff reopen it.
+  CLOSING
+  CLOSED
+
+  @@map("table_session_status")
+}
+
+enum TableSessionCloseReason {
+  SETTLED
+  EXPIRED
+  STAFF
+
+  @@map("table_session_close_reason")
+}
+
+enum TableCartItemStatus {
+  DRAFT
+  SUBMITTED
+
+  @@map("table_cart_item_status")
+}
+
+/// One phone at the table. Its signed token (contracts TABLE_GUEST_HEADER) carries this id.
+model TableGuest {
+  id          String   @id @default(uuid()) @db.Uuid
+  sessionId   String   @map("session_id") @db.Uuid
+  /// 1, 2, 3... in the order they joined ("Guest 2" until they give a name).
+  number      Int      @db.SmallInt
+  displayName String?  @map("display_name") @db.VarChar(30)
+  joinedAt    DateTime @default(now()) @map("joined_at") @db.Timestamptz(3)
+  lastSeenAt  DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+
+  session    TableSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  cartItems  TableCartItem[]
+  orderItems OrderItem[]
+
+  @@unique([sessionId, number])
+  @@map("table_guests")
+}
+
+/// A dish in a table session's shared order. Names and price are copied when added and checked again
+/// when sent; a sent dish (SUBMITTED) belongs to an order and no longer changes here.
+model TableCartItem {
+  id                String              @id @default(uuid()) @db.Uuid
+  sessionId         String              @map("session_id") @db.Uuid
+  guestId           String              @map("guest_id") @db.Uuid
+  menuItemId        String              @map("menu_item_id") @db.Uuid
+  variantId         String              @map("variant_id") @db.Uuid
+  nameAr            String              @map("name_ar") @db.VarChar(100)
+  nameEn            String?             @map("name_en") @db.VarChar(100)
+  variantNameAr     String?             @map("variant_name_ar") @db.VarChar(40)
+  variantNameEn     String?             @map("variant_name_en") @db.VarChar(40)
+  unitPricePiastres Int                 @map("unit_price_piastres")
+  quantity          Int                 @db.SmallInt
+  note              String?             @db.VarChar(200)
+  status            TableCartItemStatus @default(DRAFT)
+  orderId           String?             @map("order_id") @db.Uuid
+  /// Bumped on every change, so two phones cannot overwrite each other.
+  version           Int                 @default(0)
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  submittedAt       DateTime?           @map("submitted_at") @db.Timestamptz(3)
+
+  session TableSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  guest   TableGuest   @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  order   Order?       @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId, status])
+  @@index([orderId])
+  @@map("table_cart_items")
 }

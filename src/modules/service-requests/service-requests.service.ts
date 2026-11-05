@@ -12,7 +12,6 @@ import {
   type Paginated,
   type PublicServiceRequest,
   SERVICE_REQUEST_ERROR_CODES,
-  SERVICE_REQUEST_LIMITS,
   SERVICE_REQUEST_TRANSITIONS,
   type ServiceRequestStaff,
   type ServiceRequestStats,
@@ -26,6 +25,7 @@ import type { z } from 'zod';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { BranchScopeService } from '../branches/branch-scope.service.js';
 import type { TrackingTokens } from '../orders/tracking-token.js';
+import { liveSessionWhere, openSessionFor } from '../table-sessions/session-lifecycle.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { hasAccess } from '../subscriptions/access.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
@@ -34,7 +34,6 @@ import { TABLE_SESSION_TOKENS } from './session-token.js';
 const { SERVICE_REQUESTS_UNAVAILABLE, TABLE_SESSION_INVALID, SERVICE_REQUEST_NOT_FOUND, SERVICE_REQUEST_THROTTLED, INVALID_SERVICE_REQUEST_TRANSITION, SERVICE_REQUEST_ASSIGNEE_INVALID } =
   SERVICE_REQUEST_ERROR_CODES;
 const OPEN: ServiceRequestStatus[] = [...OPEN_SERVICE_REQUEST_STATUSES];
-const IDLE_MS = SERVICE_REQUEST_LIMITS.sessionIdleHours * 60 * 60 * 1000;
 
 const staffSelect = { select: { id: true, fullName: true, role: true } } as const;
 const requestInclude = {
@@ -74,10 +73,9 @@ export class ServiceRequestsService {
     if (!table) throw new NotFoundException({ code: 'TABLE_NOT_FOUND', message: 'This table was not found. Scan the QR code again.' });
     await this.ensureAvailable(table.restaurant, now);
     const held = sessionToken ? this.tokens.verify(sessionToken) : null;
-    const live = { tableId: table.id, endedAt: null, lastActivityAt: { gt: new Date(now.getTime() - IDLE_MS) } };
-    const session = (held ? await this.prisma.tableSession.findFirst({ where: { id: held, ...live } }) : null)
-      ?? (await this.prisma.tableSession.findFirst({ where: live, orderBy: { lastActivityAt: 'desc' } }))
-      ?? (await this.prisma.tableSession.create({ data: { restaurantId: table.restaurantId, branchId: table.branchId, tableId: table.id, startedAt: now, lastActivityAt: now } }));
+    // The table's one open session (shared with its guests' shared order), never a second one.
+    const session = (held ? await this.prisma.tableSession.findFirst({ where: { id: held, tableId: table.id, ...liveSessionWhere(now) } }) : null)
+      ?? (await openSessionFor(this.prisma, table, now));
     const requests = await this.prisma.serviceRequest.findMany({ where: { sessionId: session.id }, orderBy: { createdAt: 'desc' }, include: requestInclude });
     return { sessionToken: this.tokens.issue(session.id), table: { label: table.label }, requests: requests.map(toPublic) };
   }
@@ -127,8 +125,13 @@ export class ServiceRequestsService {
         },
         include: requestInclude,
       }),
-      this.prisma.tableSession.update({ where: { id: session.id }, data: { lastActivityAt: now } }),
+      // Asking for the bill puts the shared order in CLOSING: no new dishes until the staff reopen it.
+      this.prisma.tableSession.update({
+        where: { id: session.id },
+        data: { lastActivityAt: now, ...(input.type === 'REQUEST_BILL' && session.status === 'ACTIVE' && { status: 'CLOSING', version: { increment: 1 } }) },
+      }),
     ]);
+    if (input.type === 'REQUEST_BILL' && session.status === 'ACTIVE') this.realtime.emitTableSession(session.id, { reason: 'status', status: 'CLOSING' });
     this.realtime.emitServiceRequest('created', restaurant.id, session.id, toOwner(request), toPublic(request));
     return { request: toPublic(request), duplicate: false };
   }
@@ -251,7 +254,7 @@ export class ServiceRequestsService {
     const id = this.tokens.verify(token);
     const session = id
       ? await this.prisma.tableSession.findFirst({
-        where: { id, endedAt: null, lastActivityAt: { gt: new Date(now.getTime() - IDLE_MS) }, table: { isActive: true }, branch: { isActive: true } },
+        where: { id, ...liveSessionWhere(now), table: { isActive: true }, branch: { isActive: true } },
         include: { table: { select: { id: true, label: true } }, restaurant: true },
       })
       : null;

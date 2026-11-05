@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
+import { CashModule } from '../cash/cash.module.js';
 import { KitchenDisplayModule } from '../kitchen-display/kitchen-display.module.js';
 import { MediaModule } from '../media/media.module.js';
 import { MenusModule } from '../menus/menus.module.js';
@@ -11,8 +12,9 @@ import { OrdersController, PublicOrdersController } from './orders.controller.js
 import { OrdersService } from './orders.service.js';
 
 @Module({
-  imports: [AuthModule, MediaModule, MenusModule, SubscriptionsModule, RealtimeModule, RecommendationsModule, KitchenDisplayModule],
+  imports: [AuthModule, MediaModule, MenusModule, SubscriptionsModule, RealtimeModule, RecommendationsModule, KitchenDisplayModule, CashModule],
   controllers: [OrdersController, PublicOrdersController],
   providers: [OrdersService, OrderAlertsService],
+  exports: [OrdersService],
 })
 export class OrdersModule {}

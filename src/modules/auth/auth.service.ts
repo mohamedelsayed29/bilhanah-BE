@@ -44,7 +44,8 @@ export type ClientMeta = { ipAddress?: string; userAgent?: string };
 export type IssuedSession = {
   response: SessionResponse;
   refreshToken: string;
-  refreshTokenMaxAgeMs: number;
+  /** Undefined: a browser-session cookie (the user did not ask to stay signed in). */
+  refreshTokenMaxAgeMs: number | undefined;
 };
 
 const invalidCredentials = () =>
@@ -88,6 +89,7 @@ export class AuthService {
   private readonly refreshTtlMs: number;
   private readonly sessionMaxMs: number;
   private readonly adminSessionMaxMs: number;
+  private readonly rememberMs: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -101,6 +103,7 @@ export class AuthService {
     this.refreshTtlMs = config.get('REFRESH_TOKEN_TTL_DAYS', { infer: true }) * DAY_MS;
     this.sessionMaxMs = config.get('SESSION_MAX_DAYS', { infer: true }) * DAY_MS;
     this.adminSessionMaxMs = config.get('ADMIN_SESSION_HOURS', { infer: true }) * 60 * 60 * 1000;
+    this.rememberMs = config.get('REMEMBER_ME_DAYS', { infer: true }) * DAY_MS;
   }
 
   async register(input: z.output<typeof registerOwnerSchema>): Promise<void> {
@@ -194,7 +197,7 @@ export class AuthService {
       });
     }
 
-    return this.startSession(user, meta);
+    return this.startSession(user, meta, input.remember ?? null);
   }
 
   /**
@@ -226,7 +229,7 @@ export class AuthService {
     return this.startSession(user, meta);
   }
 
-  private async startSession(user: User, meta: ClientMeta): Promise<IssuedSession> {
+  private async startSession(user: User, meta: ClientMeta, remember: boolean | null = null): Promise<IssuedSession> {
     const secret = generateToken();
     const now = new Date();
     const session = await this.prisma.session.create({
@@ -234,12 +237,13 @@ export class AuthService {
         userId: user.id,
         tokenHash: hashToken(secret),
         createdAt: now,
-        expiresAt: this.nextExpiry(now, now, user.role),
+        remember,
+        expiresAt: this.nextExpiry(now, now, user.role, remember),
         userAgent: meta.userAgent?.slice(0, 512),
         ipAddress: meta.ipAddress?.slice(0, 64),
       },
     });
-    return this.issue(user, session.id, secret, session.expiresAt);
+    return this.issue(user, session.id, secret, session.expiresAt, remember);
   }
 
   /**
@@ -261,7 +265,7 @@ export class AuthService {
       !session ||
       session.revokedAt ||
       session.expiresAt <= now ||
-      this.nextExpiry(session.createdAt, now, session.user.role) <= now ||
+      this.nextExpiry(session.createdAt, now, session.user.role, session.remember) <= now ||
       session.user.status !== 'ACTIVE' ||
       (session.user.role === 'ADMIN') !== (app === 'admin')
     ) {
@@ -278,7 +282,7 @@ export class AuthService {
     }
 
     const nextSecret = generateToken();
-    const nextExpiresAt = this.nextExpiry(session.createdAt, now, session.user.role);
+    const nextExpiresAt = this.nextExpiry(session.createdAt, now, session.user.role, session.remember);
     const rotated = await this.prisma.session.updateMany({
       where: { id: session.id, tokenHash: session.tokenHash, revokedAt: null },
       data: {
@@ -290,7 +294,7 @@ export class AuthService {
     // Another request rotated this token between our read and write.
     if (rotated.count !== 1) throw sessionInvalid();
 
-    return this.issue(session.user, session.id, nextSecret, nextExpiresAt);
+    return this.issue(session.user, session.id, nextSecret, nextExpiresAt, session.remember);
   }
 
   /** Ends the session identified by the cookie. Silently ignores unknown or stale tokens. */
@@ -402,12 +406,19 @@ export class AuthService {
   }
 
   /** Each use extends a session, but never past SESSION_MAX_DAYS (ADMIN_SESSION_HOURS for administrators) from sign-in. */
-  private nextExpiry(createdAt: Date, now: Date, role: UserRole): Date {
-    const maxMs = role === 'ADMIN' ? this.adminSessionMaxMs : this.sessionMaxMs;
+  /**
+   * `remember`: true lasts REMEMBER_ME_DAYS from sign-in; false at most a day (its cookie also ends with the browser);
+   * null is the standard session, sliding by REFRESH_TOKEN_TTL_DAYS up to SESSION_MAX_DAYS.
+   */
+  private nextExpiry(createdAt: Date, now: Date, role: UserRole, remember: boolean | null = null): Date {
+    const maxMs = role === 'ADMIN' ? this.adminSessionMaxMs
+      : remember === true ? Math.min(this.rememberMs, this.sessionMaxMs)
+      : remember === false ? Math.min(DAY_MS, this.sessionMaxMs)
+      : this.sessionMaxMs;
     return new Date(Math.min(now.getTime() + this.refreshTtlMs, createdAt.getTime() + maxMs));
   }
 
-  private async issue(user: User, sessionId: string, secret: string, expiresAt: Date): Promise<IssuedSession> {
+  private async issue(user: User, sessionId: string, secret: string, expiresAt: Date, remember: boolean | null = null): Promise<IssuedSession> {
     return {
       response: {
         accessToken: await this.accessTokens.sign(user.id, sessionId, user.role),
@@ -415,7 +426,7 @@ export class AuthService {
         user: toAuthUser(user),
       },
       refreshToken: formatRefreshToken(sessionId, secret),
-      refreshTokenMaxAgeMs: Math.max(0, expiresAt.getTime() - Date.now()),
+      refreshTokenMaxAgeMs: remember === false ? undefined : Math.max(0, expiresAt.getTime() - Date.now()),
     };
   }
 

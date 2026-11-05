@@ -346,8 +346,8 @@ describe('Home Screen install', () => {
       start_url: 'https://koshary.bilhanah.test/',
       scope: 'https://koshary.bilhanah.test/',
       display: 'standalone',
-      background_color: '#fff8ef',
-      theme_color: '#075e54',
+      background_color: '#fff3e7',
+      theme_color: '#f45164',
       icons: [
         { src: `${host}/v1/public/restaurants/koshary/icon-192.png?v=mark`, sizes: '192x192', type: 'image/png', purpose: 'any' },
         { src: `${host}/v1/public/restaurants/koshary/icon-512.png?v=mark`, sizes: '512x512', type: 'image/png', purpose: 'any' },
