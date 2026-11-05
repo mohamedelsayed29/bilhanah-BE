@@ -6,10 +6,26 @@ export type ReservationStatus = (typeof RESERVATION_STATUSES)[number];
 /** Bookings still to come: they hold their table (TABLE_RESERVED_WINDOW). */
 export const UPCOMING_RESERVATION_STATUSES = ['PENDING', 'CONFIRMED'] as const satisfies readonly ReservationStatus[];
 
+/** Bookings that still take their table's time slot: two of these on one table must not overlap. */
+export const ACTIVE_RESERVATION_STATUSES = ['PENDING', 'CONFIRMED', 'SEATED'] as const satisfies readonly ReservationStatus[];
+
+/**
+ * How long a booking keeps its table: two active bookings on one table must start at least this far apart.
+ * A seated party keeps the table occupied until its bill is settled, at most SEATED_HOLD_HOURS after the booking's time.
+ */
+export const RESERVATION_SLOT_MINUTES = 120;
+export const SEATED_HOLD_HOURS = 4;
+
 export const RESERVATION_LIMITS = { guests: 50, rangeDays: 31 } as const;
 
 export const RESERVATION_ERROR_CODES = {
   RESERVATION_NOT_FOUND: 'RESERVATION_NOT_FOUND',
+  /** The table already has an active booking within RESERVATION_SLOT_MINUTES of this one. */
+  RESERVATION_CONFLICT: 'RESERVATION_CONFLICT',
+  /** Guests can only be seated at a table: pick one first. */
+  RESERVATION_TABLE_REQUIRED: 'RESERVATION_TABLE_REQUIRED',
+  /** The table is switched off. */
+  RESERVATION_TABLE_UNAVAILABLE: 'RESERVATION_TABLE_UNAVAILABLE',
 } as const;
 
 const isoDateTime = z.iso.datetime({ offset: true });
@@ -44,9 +60,9 @@ export const updateReservationSchema = z.strictObject({
   notes: optionalNotes,
 });
 
-/** GET /v1/reservations?from=&to=: bookings in [from, to), earliest first, up to RESERVATION_LIMITS.rangeDays apart. */
+/** GET /v1/reservations?from=&to=[&status=]: bookings in [from, to), earliest first, up to RESERVATION_LIMITS.rangeDays apart. */
 export const listReservationsQuerySchema = z
-  .object({ branchId: z.uuid().optional(), from: isoDateTime, to: isoDateTime })
+  .object({ branchId: z.uuid().optional(), from: isoDateTime, to: isoDateTime, status: z.enum(RESERVATION_STATUSES).optional() })
   .refine((range) => {
     const span = Date.parse(range.to) - Date.parse(range.from);
     return span > 0 && span <= RESERVATION_LIMITS.rangeDays * 24 * 60 * 60 * 1000;

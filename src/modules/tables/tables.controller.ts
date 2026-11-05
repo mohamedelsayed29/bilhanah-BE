@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, Header, HttpCode, HttpStatus, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, HttpCode, HttpStatus, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import type { Request } from 'express';
 import {
   branchQuerySchema,
   bulkCreateTablesSchema,
@@ -171,7 +172,7 @@ export class PublicTablesController {
 
   @Get(':code')
   @RateLimit({ name: 'public-table:ip', limit: 120, windowSeconds: 60, by: 'ip' })
-  find(@Param('subdomain') subdomain: string, @Param('code') code: string): Promise<PublicTable> {
-    return this.tables.findPublic(subdomain, code);
+  find(@Param('subdomain') subdomain: string, @Param('code') code: string, @Req() request: Request): Promise<PublicTable> {
+    return this.tables.findPublic(subdomain, code, { ip: request.ip ?? '', userAgent: request.get('user-agent') ?? '' });
   }
 }

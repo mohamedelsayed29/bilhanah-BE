@@ -108,6 +108,7 @@ model User {
   assignedServiceRequests  ServiceRequest[]         @relation("ServiceRequestAssignee")
   handledServiceRequests   ServiceRequest[]         @relation("ServiceRequestHandler")
   orderStatusEvents        OrderStatusEvent[]
+  orderTableTransfers      OrderTableTransfer[]
   orderItemEvents          OrderItemEvent[]
   employee                 Employee?
   attendanceReviews        AttendanceCorrection[]   @relation("AttendanceReviewer")
@@ -226,6 +227,7 @@ model Restaurant {
   reminders             ExpiryReminder[]
   tables                Table[]
   tableAreas            TableArea[]
+  tableGroups           TableGroup[]
   reservations          Reservation[]
   tableSessions         TableSession[]
   serviceRequests       ServiceRequest[]
@@ -285,6 +287,7 @@ model Branch {
   staff                User[]                @relation("BranchStaff")
   tables               Table[]
   tableAreas           TableArea[]
+  tableGroups          TableGroup[]
   reservations         Reservation[]
   tableSessions        TableSession[]
   serviceRequests      ServiceRequest[]
@@ -632,7 +635,13 @@ model Table {
   attributes       TableAttribute[] @default([])
   /// Random code printed in the table's QR; regenerating it retires printed codes.
   publicCode       String           @unique @map("public_code") @db.VarChar(16)
+  /// Switched off: the table shows as unavailable and takes no orders or bookings.
   isActive         Boolean          @default(true) @map("is_active")
+  /// Its housekeeping state: CLEANING after the guests leave (set when the bill is settled) until staff mark it ready.
+  condition        TableCondition   @default(READY)
+  conditionAt      DateTime?        @map("condition_at") @db.Timestamptz(3)
+  /// The merged seating group it belongs to now, if any (see TableGroup).
+  groupId          String?          @map("group_id") @db.Uuid
   sortOrder        Int              @map("sort_order")
   createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -640,6 +649,8 @@ model Table {
   restaurant      Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   branch          Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
   area            TableArea?       @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  group           TableGroup?      @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  dailyStats      TableDailyStat[]
   orders          Order[]
   reservations    Reservation[]
   sessions        TableSession[]
@@ -649,7 +660,30 @@ model Table {
   @@index([restaurantId])
   @@index([branchId, sortOrder])
   @@index([areaId])
+  @@index([groupId])
   @@map("tables")
+}
+
+/// Tables merged for a larger party: one seating group with the seats of all of them and one shared session (on
+/// the lead table). Separating them ends the group (dissolvedAt) but keeps its record; orders stay on their tables.
+model TableGroup {
+  id           String    @id @default(uuid()) @db.Uuid
+  restaurantId String    @map("restaurant_id") @db.Uuid
+  branchId     String    @map("branch_id") @db.Uuid
+  /// The table whose session the whole group shares.
+  leadTableId  String    @map("lead_table_id") @db.Uuid
+  /// The tables merged, as they were (kept after the group is dissolved).
+  tableIds     String[]  @map("table_ids") @db.Uuid
+  label        String?   @db.VarChar(40)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  dissolvedAt  DateTime? @map("dissolved_at") @db.Timestamptz(3)
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  tables     Table[]
+
+  @@index([branchId, dissolvedAt])
+  @@map("table_groups")
 }
 
 /// A seating area of one branch (Main hall, Garden, Rooftop, VIP): a name, indoor or outdoor, and its tables.
@@ -894,6 +928,14 @@ model ServiceRequest {
   @@map("service_requests")
 }
 
+/// A table's housekeeping state, kept apart from what orders and bookings say about it.
+enum TableCondition {
+  READY
+  CLEANING
+
+  @@map("table_condition")
+}
+
 enum ReservationStatus {
   PENDING
   CONFIRMED
@@ -998,6 +1040,7 @@ model Order {
   items             OrderItem[]
   pushSubscriptions PushSubscription[]
   statusEvents      OrderStatusEvent[]
+  tableTransfers    OrderTableTransfer[]
   itemEvents        OrderItemEvent[]
   cashTransactions  CashTransaction[]
   tableSession      TableSession?      @relation(fields: [tableSessionId], references: [id], onDelete: SetNull)
@@ -1153,6 +1196,28 @@ model OrderCounter {
 /// A diner's browser asking to hear about one order (Web Push). Deleted once
 /// the order is finished, or when the push service says it is gone.
 /// The status history of an order: who moved it where, and when.
+/// An order moved from one table to another (the guests changed tables): where from, where to, when and by whom.
+/// The labels are kept so the record still reads after a table is renamed or deleted.
+model OrderTableTransfer {
+  id             String   @id @default(uuid()) @db.Uuid
+  orderId        String   @map("order_id") @db.Uuid
+  fromTableId    String?  @map("from_table_id") @db.Uuid
+  fromTableLabel String   @map("from_table_label") @db.VarChar(40)
+  toTableId      String?  @map("to_table_id") @db.Uuid
+  toTableLabel   String   @map("to_table_label") @db.VarChar(40)
+  actorId        String?  @map("actor_id") @db.Uuid
+  /// Kept when the account is removed.
+  actorName      String?  @map("actor_name") @db.VarChar(100)
+  reason         String?  @db.VarChar(200)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, createdAt])
+  @@map("order_table_transfers")
+}
+
 model OrderStatusEvent {
   id        String      @id @default(uuid()) @db.Uuid
   orderId   String      @map("order_id") @db.Uuid
@@ -1337,6 +1402,21 @@ model StandOrderEvent {
 // --- Analytics ----------------------------------------------------------------
 
 /// Menu visits per restaurant and day (restaurant time zone), copied from Redis counters by the worker.
+/// QR scans of one table per local day: a phone opening the menu from the table's code counts once per half hour.
+model TableDailyStat {
+  tableId      String   @map("table_id") @db.Uuid
+  restaurantId String   @map("restaurant_id") @db.Uuid
+  branchId     String   @map("branch_id") @db.Uuid
+  day          DateTime @db.Date
+  scans        Int      @default(0)
+
+  table Table @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@id([tableId, day])
+  @@index([restaurantId, day])
+  @@map("table_daily_stats")
+}
+
 model RestaurantDailyStat {
   restaurantId String   @map("restaurant_id") @db.Uuid
   day          DateTime @db.Date

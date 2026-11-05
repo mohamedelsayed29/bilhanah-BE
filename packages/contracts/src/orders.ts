@@ -34,6 +34,21 @@ export const ORDER_ERROR_CODES = {
   RESTAURANT_CLOSED: 'RESTAURANT_CLOSED',
   ORDER_TYPE_UNAVAILABLE: 'ORDER_TYPE_UNAVAILABLE',
   TABLE_NOT_FOUND: 'TABLE_NOT_FOUND',
+  /** Tables that cannot be merged as asked: another branch or area, switched off, already merged, or too many. */
+  TABLE_GROUP_INVALID: 'TABLE_GROUP_INVALID',
+  /** Two of the tables have different parties (open orders, guests or bookings): they cannot share one session. */
+  TABLE_GROUP_CONFLICT: 'TABLE_GROUP_CONFLICT',
+  /** Guests are at the merged tables: settle their bill before separating them. */
+  TABLE_GROUP_BUSY: 'TABLE_GROUP_BUSY',
+  TABLE_GROUP_NOT_FOUND: 'TABLE_GROUP_NOT_FOUND',
+  /** A merged table cannot be switched off or deleted on its own: separate the group first. */
+  TABLE_IN_GROUP: 'TABLE_IN_GROUP',
+  /** Only dine-in orders still open on a table move: not rejected, cancelled, or completed and paid. */
+  ORDER_NOT_TRANSFERABLE: 'ORDER_NOT_TRANSFERABLE',
+  /** The destination cannot take the order: the same seating, switched off, being cleaned, held by a booking, or with other guests. details: { status } */
+  TABLE_TRANSFER_INVALID: 'TABLE_TRANSFER_INVALID',
+  /** A status change the table's current status does not allow (see TABLE_STATUS_TRANSITIONS). */
+  TABLE_STATUS_INVALID: 'TABLE_STATUS_INVALID',
   /** details.menuItemIds lists the dishes that are sold out, hidden or gone. */
   ITEMS_UNAVAILABLE: 'ITEMS_UNAVAILABLE',
   ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
@@ -203,9 +218,24 @@ export type OrderStatusStep = { status: OrderStatus; at: string; reason: string 
 /** In the restaurant's view, who made the change: null for the diner placing it. */
 export type OwnerOrderStatusStep = OrderStatusStep & { actorName: string | null };
 
+/** The order moved to another table: from, to, when, by whom and why. */
+export type OrderTableTransferStep = { fromTableLabel: string; toTableLabel: string; at: string; actorName: string | null; reason: string | null };
+
+/**
+ * POST /v1/orders/:id/transfer: moves a dine-in order still open on its table to another table of its branch that
+ * is free (available, not held by a booking, not being cleaned, no other guests). Everything on the order stays as it
+ * was; when nothing else is left on the old table, its guests' session and seated booking move along, and it is to be cleaned.
+ */
+export const transferOrderSchema = z.strictObject({
+  tableId: z.uuid(),
+  reason: z.string().trim().max(200).transform((value) => (value === '' ? null : value)).nullable().optional(),
+});
+
 /** An order as the restaurant sees it. */
 export type OwnerOrder = Omit<OrderCore, 'history'> & {
   history: OwnerOrderStatusStep[];
+  /** Every move to another table, oldest first. */
+  transfers: OrderTableTransferStep[];
   id: string;
   branchId: string;
   branchName: string;
@@ -376,6 +406,10 @@ export type RestaurantTable = {
   minOrderPiastres: number | null;
   notes: string | null;
   attributes: TableAttribute[];
+  /** Being cleaned (see TableOccupancy.cleaning). */
+  cleaning: boolean;
+  /** The merged seating group it belongs to now (see TableGroupView), or null. */
+  groupId: string | null;
   publicCode: string;
   isActive: boolean;
   /** The URL printed in this table's QR code. */
@@ -425,6 +459,56 @@ export type TableArea = {
 /** A pending or confirmed booking holds its table from this long before its time until this long after. */
 export const TABLE_RESERVED_WINDOW = { beforeMinutes: 120, afterMinutes: 30 } as const;
 
+/**
+ * A table's status on the floor plan, in priority order: switched off (UNAVAILABLE), guests at it (OCCUPIED:
+ * an unpaid order or a seated booking), being cleaned (CLEANING), held by a booking around its time (RESERVED),
+ * or free (AVAILABLE). OCCUPIED and RESERVED follow orders and bookings; staff set the other three.
+ */
+export const TABLE_STATUSES = ['AVAILABLE', 'OCCUPIED', 'RESERVED', 'CLEANING', 'UNAVAILABLE'] as const;
+export type TableStatus = (typeof TABLE_STATUSES)[number];
+/** What staff may set by hand (PATCH /v1/orders/tables/:id/status). */
+export const MANUAL_TABLE_STATUSES = ['AVAILABLE', 'CLEANING', 'UNAVAILABLE'] as const satisfies readonly TableStatus[];
+export type ManualTableStatus = (typeof MANUAL_TABLE_STATUSES)[number];
+export const updateTableStatusSchema = z.strictObject({ status: z.enum(MANUAL_TABLE_STATUSES) });
+/**
+ * The hand changes allowed from each status: guests must be billed before their table is cleaned or switched
+ * off, and a held table is only switched off (its booking stays). Setting a table to the status it has is a no-op.
+ */
+export const TABLE_STATUS_TRANSITIONS: Record<TableStatus, readonly ManualTableStatus[]> = {
+  AVAILABLE: ['CLEANING', 'UNAVAILABLE'],
+  RESERVED: ['CLEANING', 'UNAVAILABLE'],
+  CLEANING: ['AVAILABLE', 'UNAVAILABLE'],
+  UNAVAILABLE: ['AVAILABLE', 'CLEANING'],
+  OCCUPIED: [],
+};
+
+// --- Merged tables ---------------------------------------------------------------
+
+/** How many tables one group may merge. */
+export const TABLE_GROUP_LIMITS = { tables: 8 } as const;
+
+/**
+ * POST /v1/table-groups: merges active tables of one branch and one area (or, outside areas, one location) into a
+ * seating group. At most one of them may have a party (open orders, guests, a seated or upcoming booking); the
+ * group then shares that table's session.
+ */
+export const createTableGroupSchema = z.strictObject({
+  tableIds: z.array(z.uuid()).min(2).max(TABLE_GROUP_LIMITS.tables).transform((ids) => [...new Set(ids)]).refine((ids) => ids.length >= 2, { message: 'Pick at least two different tables.' }),
+  label: z.string().trim().max(40).transform((value) => (value === '' ? null : value)).nullable().optional(),
+});
+
+export type TableGroupView = {
+  id: string;
+  branchId: string;
+  label: string | null;
+  leadTableId: string;
+  tableIds: string[];
+  tableLabels: string[];
+  /** The merged capacity: every member's seats. */
+  seats: number;
+  createdAt: string;
+};
+
 /** Unpaid orders older than this no longer keep a table occupied (a forgotten bill must not block it forever). */
 export const TABLE_OCCUPANCY_HOURS = 12;
 
@@ -442,9 +526,18 @@ export type TableOccupancy = {
   seats: number;
   location: TableLocation;
   areaId: string | null;
+  /** Its status now (see TABLE_STATUSES). */
+  status: TableStatus;
+  /** Guests are at it: an unpaid order, or a seated booking (until its bill is settled; see SEATED_HOLD_HOURS). */
   occupied: boolean;
+  /** Being cleaned: set when the bill is settled, cleared by staff. */
+  cleaning: boolean;
   /** The booking that holds it now (see TABLE_RESERVED_WINDOW), when it is not occupied. */
   reservation: { id: string; customerName: string; reservedAt: string; guests: number } | null;
+  /** The booked party seated at it, if any. */
+  seated: { id: string; customerName: string; reservedAt: string; guests: number } | null;
+  /** Merged with other tables: every member shows the group's status; the group's bill is all its members' orders. */
+  group: { id: string; label: string | null; leadTableId: string; tableIds: string[]; seats: number } | null;
   /** Oldest first. */
   openOrders: TableOpenOrder[];
   unpaidPiastres: number;
@@ -471,7 +564,11 @@ export const REALTIME_EVENTS = {
   ORDER_UPDATED: 'order.updated',
   /** /owner only: ordering settings changed (e.g. paused on another device). */
   RESTAURANT_UPDATED: 'restaurant.updated',
+  /** /owner only: a table's status changed by hand, or its bill was settled; the floor plan fetches it again. */
+  TABLE_UPDATED: 'table.updated',
 } as const;
+
+export type TableUpdatedEvent = { branchId: string; tableId: string; status: TableStatus };
 
 export type OwnerOrderEvent = { order: OwnerOrder };
 export type TrackedOrderEvent = { order: PublicOrder };

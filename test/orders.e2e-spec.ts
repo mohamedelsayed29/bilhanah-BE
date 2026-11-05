@@ -298,11 +298,20 @@ describe('tables', () => {
     const order = await placeOrder(menu, { type: 'DINE_IN', tableCode: table.body.publicCode, customerPhone: undefined }).expect(201);
     expect(order.body.order.tableLabel).toBe('Table 1');
 
-    // A new code retires the printed one; deleting the table keeps past orders' table name.
+    // A new code retires the printed one and points to the same table, which keeps its settings and its orders.
+    const configured = await http().patch(`/v1/tables/${table.body.id}`).set(auth(menu.token))
+      .send({ seats: 6, shape: 'ROUND', notes: 'By the window', minOrderPiastres: 20_000 }).expect(200);
     const renewed = await http().post(`/v1/tables/${table.body.id}/code`).set(auth(menu.token)).expect(201);
     expect(renewed.body.publicCode).not.toBe(table.body.publicCode);
+    expect(renewed.body.qrUrl).toBe(`https://koshary.bilhanah.test/?t=${renewed.body.publicCode}`);
+    expect({ ...renewed.body, publicCode: undefined, qrUrl: undefined }).toEqual({ ...configured.body, publicCode: undefined, qrUrl: undefined });
     const stale = await placeOrder(menu, { type: 'DINE_IN', tableCode: table.body.publicCode, customerPhone: undefined }).expect(404);
     expect(stale.body.error.code).toBe('TABLE_NOT_FOUND');
+    await http().get(`/v1/public/restaurants/koshary/tables/${table.body.publicCode}`).expect(404);
+    expect((await http().get(`/v1/public/restaurants/koshary/tables/${renewed.body.publicCode}`).expect(200)).body).toEqual({ label: 'Table 1', branch: 'main' });
+    await placeOrder(menu, { type: 'DINE_IN', tableCode: renewed.body.publicCode, customerPhone: undefined }).expect(201);
+    // Both orders, before and after the new code, stay on the table's history.
+    expect(await t.prisma.order.count({ where: { tableId: table.body.id } })).toBe(2);
     await http().delete(`/v1/tables/${table.body.id}`).set(auth(menu.token)).expect(204);
     expect((await http().get(`/v1/public/orders/${order.body.trackingToken}`).expect(200)).body.tableLabel).toBe('Table 1');
   });
@@ -443,10 +452,41 @@ describe('floor plan details and reservations', () => {
     expect(listed.body.map((row: { customerName: string }) => row.customerName)).toEqual(['Mona', 'Karim']);
     await http().get(`/v1/reservations?from=${encodeURIComponent(to)}&to=${encodeURIComponent(from)}`).set(auth(menu.token)).expect(400);
 
-    // Seating the guests frees the hold; cancelled bookings never hold a table.
+    // Filtering by status.
+    const pendingOnly = await http().get(`/v1/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&status=PENDING`).set(auth(menu.token)).expect(200);
+    expect(pendingOnly.body).toEqual([]);
+    const confirmedOnly = await http().get(`/v1/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&status=CONFIRMED`).set(auth(menu.token)).expect(200);
+    expect(confirmedOnly.body).toHaveLength(2);
+
+    // No two active bookings on one table within RESERVATION_SLOT_MINUTES; a cancelled one frees its slot.
+    const inAnHour = new Date(Date.parse(soon) + 60 * 60_000).toISOString();
+    const clash = await http().post('/v1/reservations').set(auth(menu.token)).send({ customerName: 'Clash', guests: 2, reservedAt: inAnHour, tableId: table.body.id }).expect(409);
+    expect(clash.body.error).toMatchObject({ code: 'RESERVATION_CONFLICT', details: { customerName: 'Mona' } });
+    const threeHoursLater = new Date(Date.parse(soon) + 3 * 60 * 60_000).toISOString();
+    const evening = await http().post('/v1/reservations').set(auth(menu.token)).send({ customerName: 'Evening', guests: 2, reservedAt: threeHoursLater, tableId: table.body.id }).expect(201);
+    // Moving a booking onto a taken slot fails too; cancelling and coming back is checked again.
+    expect((await http().patch(`/v1/reservations/${evening.body.id}`).set(auth(menu.token)).send({ reservedAt: inAnHour }).expect(409)).body.error.code).toBe('RESERVATION_CONFLICT');
+    await http().patch(`/v1/reservations/${evening.body.id}`).set(auth(menu.token)).send({ status: 'CANCELLED' }).expect(200);
+    await http().patch(`/v1/reservations/${evening.body.id}`).set(auth(menu.token)).send({ reservedAt: inAnHour }).expect(200);
+    expect((await http().patch(`/v1/reservations/${evening.body.id}`).set(auth(menu.token)).send({ status: 'CONFIRMED' }).expect(409)).body.error.code).toBe('RESERVATION_CONFLICT');
+    // Editing a booking's other details never trips over itself.
+    await http().patch(`/v1/reservations/${booking.body.id}`).set(auth(menu.token)).send({ notes: 'Birthday', guests: 5 }).expect(200);
+
+    // Only switched-on tables take bookings, and only a booking with a table can be seated.
+    const off = await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'T-9' }).expect(201);
+    await http().patch(`/v1/tables/${off.body.id}`).set(auth(menu.token)).send({ isActive: false }).expect(200);
+    expect((await http().post('/v1/reservations').set(auth(menu.token)).send({ customerName: 'Off', guests: 2, reservedAt: later, tableId: off.body.id }).expect(409)).body.error.code).toBe('RESERVATION_TABLE_UNAVAILABLE');
+    const karim = listed.body.find((row: { customerName: string }) => row.customerName === 'Karim');
+    expect((await http().patch(`/v1/reservations/${karim.id}`).set(auth(menu.token)).send({ status: 'SEATED' }).expect(409)).body.error.code).toBe('RESERVATION_TABLE_REQUIRED');
+
+    // Seating the guests turns the hold into an occupied table with the party on it, until the bill is settled.
     const seated = await http().patch(`/v1/reservations/${booking.body.id}`).set(auth(menu.token)).send({ status: 'SEATED' }).expect(200);
     expect(seated.body.status).toBe('SEATED');
-    expect((await floor()).reservation).toBeNull();
+    expect(await floor()).toMatchObject({ occupied: true, reservation: null, seated: { id: booking.body.id, customerName: 'Mona', guests: 5 } });
+    const settled = await http().post(`/v1/orders/tables/${table.body.id}/settle`).set(auth(menu.token)).send({}).expect(200);
+    expect(settled.body.find((row: { id: string }) => row.id === table.body.id)).toMatchObject({ occupied: false, seated: null });
+    const done = await http().get(`/v1/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&status=COMPLETED`).set(auth(menu.token)).expect(200);
+    expect(done.body.map((row: { id: string }) => row.id)).toEqual([booking.body.id]);
 
     // Another restaurant cannot see, change or book onto these.
     const other = await restaurantWithMenu('other@koshary.test', 'other');
@@ -454,6 +494,60 @@ describe('floor plan details and reservations', () => {
     await http().patch(`/v1/reservations/${booking.body.id}`).set(auth(other.token)).send({ status: 'CANCELLED' }).expect(404);
     const stolen = await http().post('/v1/reservations').set(auth(other.token)).send({ customerName: 'X', guests: 2, reservedAt: soon, tableId: table.body.id }).expect(404);
     expect(stolen.body.error.code).toBe('TABLE_NOT_FOUND');
+  });
+});
+
+describe('table statuses', () => {
+  it('follows orders and bookings, turns to cleaning when the bill is paid, and refuses invalid changes', async () => {
+    const menu = await restaurantWithMenu();
+    const table = await http().post('/v1/tables').set(auth(menu.token)).send({ label: 'T-1' }).expect(201);
+    expect(table.body.cleaning).toBe(false);
+    const row = async () => (await http().get('/v1/orders/floor').set(auth(menu.token)).expect(200)).body.find((entry: { id: string }) => entry.id === table.body.id);
+    const setStatus = (status: string) => http().patch(`/v1/orders/tables/${table.body.id}/status`).set(auth(menu.token)).send({ status });
+    expect(await row()).toMatchObject({ status: 'AVAILABLE', occupied: false, cleaning: false });
+
+    // An unpaid order makes it occupied; guests must be billed before it is cleaned or switched off.
+    await placeOrder(menu, { type: 'DINE_IN', tableCode: table.body.publicCode, customerPhone: undefined }).expect(201);
+    expect((await row()).status).toBe('OCCUPIED');
+    const early = await setStatus('CLEANING').expect(409);
+    expect(early.body.error).toMatchObject({ code: 'TABLE_STATUS_INVALID', details: { from: 'OCCUPIED', to: 'CLEANING' } });
+    expect((await http().patch(`/v1/tables/${table.body.id}`).set(auth(menu.token)).send({ isActive: false }).expect(409)).body.error.code).toBe('TABLE_STATUS_INVALID');
+    // OCCUPIED and RESERVED are never set by hand.
+    await setStatus('OCCUPIED').expect(400);
+    await setStatus('RESERVED').expect(400);
+
+    // Settling the bill: the guests left, the table is to be cleaned (kept in the database), then ready again.
+    const settled = await http().post(`/v1/orders/tables/${table.body.id}/settle`).set(auth(menu.token)).send({}).expect(200);
+    expect(settled.body.find((entry: { id: string }) => entry.id === table.body.id)).toMatchObject({ status: 'CLEANING', occupied: false, cleaning: true });
+    expect((await t.prisma.table.findUniqueOrThrow({ where: { id: table.body.id } })).condition).toBe('CLEANING');
+    expect((await setStatus('AVAILABLE').expect(200)).body.find((entry: { id: string }) => entry.id === table.body.id).status).toBe('AVAILABLE');
+    expect((await t.prisma.table.findUniqueOrThrow({ where: { id: table.body.id } })).condition).toBe('READY');
+
+    // Paying the last open order on its own frees the table the same way.
+    await placeOrder(menu, { type: 'DINE_IN', tableCode: table.body.publicCode, customerPhone: undefined }).expect(201);
+    const open = await t.prisma.order.findFirstOrThrow({ where: { tableId: table.body.id, paidAt: null } });
+    await http().patch(`/v1/orders/${open.id}/payment`).set(auth(menu.token)).send({ paid: true }).expect(200);
+    expect((await row()).status).toBe('CLEANING');
+    await setStatus('AVAILABLE').expect(200);
+
+    // Switched off by hand: unavailable, off the floor and the menu; on again, available.
+    await setStatus('UNAVAILABLE').expect(200);
+    expect((await http().get('/v1/tables').set(auth(menu.token)).expect(200)).body.find((entry: { id: string }) => entry.id === table.body.id).isActive).toBe(false);
+    expect(await row()).toBeUndefined();
+    await http().get(`/v1/public/restaurants/koshary/tables/${table.body.publicCode}`).expect(404);
+    await setStatus('AVAILABLE').expect(200);
+    expect((await row()).status).toBe('AVAILABLE');
+
+    // A booking holds it as reserved; cleaning before the guests arrive shows first.
+    await http().post('/v1/reservations').set(auth(menu.token))
+      .send({ customerName: 'Mona', guests: 2, reservedAt: new Date(Date.now() + 30 * 60_000).toISOString(), tableId: table.body.id }).expect(201);
+    expect((await row()).status).toBe('RESERVED');
+    await setStatus('CLEANING').expect(200);
+    expect(await row()).toMatchObject({ status: 'CLEANING', reservation: { customerName: 'Mona' } });
+    // Setting the status it already has changes nothing.
+    await setStatus('CLEANING').expect(200);
+    await setStatus('AVAILABLE').expect(200);
+    expect((await row()).status).toBe('RESERVED');
   });
 });
 

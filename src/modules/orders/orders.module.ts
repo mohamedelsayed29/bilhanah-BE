@@ -8,13 +8,14 @@ import { RealtimeModule } from '../realtime/realtime.module.js';
 import { RecommendationsModule } from '../recommendations/recommendations.module.js';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module.js';
 import { OrderAlertsService } from './order-alerts.service.js';
-import { OrdersController, PublicOrdersController } from './orders.controller.js';
+import { OrdersController, PublicOrdersController, TableGroupsController } from './orders.controller.js';
+import { TableGroupsService } from './table-groups.service.js';
 import { OrdersService } from './orders.service.js';
 
 @Module({
   imports: [AuthModule, MediaModule, MenusModule, SubscriptionsModule, RealtimeModule, RecommendationsModule, KitchenDisplayModule, CashModule],
-  controllers: [OrdersController, PublicOrdersController],
-  providers: [OrdersService, OrderAlertsService],
+  controllers: [OrdersController, PublicOrdersController, TableGroupsController],
+  providers: [OrdersService, OrderAlertsService, TableGroupsService],
   exports: [OrdersService],
 })
 export class OrdersModule {}

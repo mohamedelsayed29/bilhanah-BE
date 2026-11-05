@@ -15,6 +15,7 @@ import {
   type PublicOrder,
   REALTIME_EVENTS,
   type RestaurantUpdatedEvent,
+  type TableUpdatedEvent,
   REALTIME_PATH,
   type TrackedOrderEvent,
 } from '@bilhanah/contracts';
@@ -122,6 +123,11 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
       ?.to([restaurantRoom(restaurantId), branchRoom(ownerView.branchId)])
       .emit(REALTIME_EVENTS.ORDER_UPDATED, { order: ownerView } satisfies OwnerOrderEvent);
     this.trackers?.to(orderRoom(ownerView.id)).emit(REALTIME_EVENTS.ORDER_UPDATED, { order: publicView } satisfies TrackedOrderEvent);
+  }
+
+  /** A table's status changed (by hand, or its bill was settled): every dashboard of its branch fetches the floor again. */
+  emitTableUpdated(restaurantId: string, event: TableUpdatedEvent): void {
+    this.owners?.to([restaurantRoom(restaurantId), branchRoom(event.branchId)]).emit(REALTIME_EVENTS.TABLE_UPDATED, event satisfies TableUpdatedEvent);
   }
 
   /** Tells the other devices that a branch's ordering settings changed (e.g. orders paused). */

@@ -25,7 +25,7 @@ import type { z } from 'zod';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { BranchScopeService } from '../branches/branch-scope.service.js';
 import type { TrackingTokens } from '../orders/tracking-token.js';
-import { liveSessionWhere, openSessionFor } from '../table-sessions/session-lifecycle.js';
+import { liveSessionWhere, openSessionFor, seatingTableId } from '../table-sessions/session-lifecycle.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { hasAccess } from '../subscriptions/access.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
@@ -74,7 +74,7 @@ export class ServiceRequestsService {
     await this.ensureAvailable(table.restaurant, now);
     const held = sessionToken ? this.tokens.verify(sessionToken) : null;
     // The table's one open session (shared with its guests' shared order), never a second one.
-    const session = (held ? await this.prisma.tableSession.findFirst({ where: { id: held, tableId: table.id, ...liveSessionWhere(now) } }) : null)
+    const session = (held ? await this.prisma.tableSession.findFirst({ where: { id: held, tableId: await seatingTableId(this.prisma, table.id), ...liveSessionWhere(now) } }) : null)
       ?? (await openSessionFor(this.prisma, table, now));
     const requests = await this.prisma.serviceRequest.findMany({ where: { sessionId: session.id }, orderBy: { createdAt: 'desc' }, include: requestInclude });
     return { sessionToken: this.tokens.issue(session.id), table: { label: table.label }, requests: requests.map(toPublic) };

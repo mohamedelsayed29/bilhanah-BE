@@ -12,6 +12,10 @@ import {
   type TableOccupancy,
   updateOrderPaymentSchema,
   settleTableSchema,
+  updateTableStatusSchema,
+  transferOrderSchema,
+  createTableGroupSchema,
+  type TableGroupView,
   placeOrderSchema,
   type PlaceOrderResponse,
   type PublicOrder,
@@ -30,6 +34,7 @@ import { RequireAnyPermission, RequirePermission, RolesGuard } from '../../commo
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
 import { OrderAlertsService } from './order-alerts.service.js';
 import { OrdersService } from './orders.service.js';
+import { TableGroupsService } from './table-groups.service.js';
 
 /**
  * The restaurant's orders: the live board, history, and status changes. Owners see every branch;
@@ -78,6 +83,31 @@ export class OrdersController {
     @Body(new ZodValidationPipe(settleTableSchema)) body: z.output<typeof settleTableSchema>,
   ): Promise<TableOccupancy[]> {
     return this.orders.settleTable(auth.userId, tableId, body.method);
+  }
+
+  /** Staff mark a table available, being cleaned or switched off. Returns the whole floor. */
+  @Patch('tables/:tableId/status')
+  @RequirePermission('tables.status')
+  @RateLimit({ name: 'order-status:ip', limit: 600, windowSeconds: 60, by: 'ip' })
+  setTableStatus(
+    @CurrentAuth() auth: AuthContext,
+    @Param('tableId', new ZodValidationPipe(orderIdParamSchema)) tableId: string,
+    @Body(new ZodValidationPipe(updateTableStatusSchema)) body: z.output<typeof updateTableStatusSchema>,
+  ): Promise<TableOccupancy[]> {
+    return this.orders.setTableStatus(auth.userId, tableId, body.status);
+  }
+
+  /** The guests changed tables: the order moves to a free table of its branch, with a transfer record. */
+  @Post(':id/transfer')
+  @RequireAnyPermission('tables.status', 'orders.update')
+  @HttpCode(HttpStatus.OK)
+  @RateLimit({ name: 'order-status:ip', limit: 600, windowSeconds: 60, by: 'ip' })
+  transfer(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', new ZodValidationPipe(orderIdParamSchema)) id: string,
+    @Body(new ZodValidationPipe(transferOrderSchema)) body: z.output<typeof transferOrderSchema>,
+  ): Promise<OwnerOrder> {
+    return this.orders.transfer(auth.userId, id, body);
   }
 
   @Get(':id')
@@ -207,5 +237,26 @@ export class PublicOrdersController {
   ): Promise<void> {
     const changed = await this.alerts.unsubscribe(token, body.endpoint);
     if (changed) await this.orders.touch(changed);
+  }
+}
+
+/** Merging tables for a larger party, and separating them (tables.status). */
+@Controller('table-groups')
+@UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
+@RequirePermission('tables.status')
+export class TableGroupsController {
+  constructor(private readonly groups: TableGroupsService) {}
+
+  @Post()
+  @RateLimit({ name: 'order-status:ip', limit: 600, windowSeconds: 60, by: 'ip' })
+  create(@CurrentAuth() auth: AuthContext, @Body(new ZodValidationPipe(createTableGroupSchema)) body: z.output<typeof createTableGroupSchema>): Promise<TableGroupView> {
+    return this.groups.create(auth.userId, body);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RateLimit({ name: 'order-status:ip', limit: 600, windowSeconds: 60, by: 'ip' })
+  async dissolve(@CurrentAuth() auth: AuthContext, @Param('id', new ZodValidationPipe(orderIdParamSchema)) id: string): Promise<void> {
+    await this.groups.dissolve(auth.userId, id);
   }
 }

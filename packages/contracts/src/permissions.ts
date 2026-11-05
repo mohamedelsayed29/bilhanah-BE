@@ -27,6 +27,8 @@ export const PERMISSIONS = [
   'tables.view',
   /** Adding, editing, removing tables and areas, and laying out the floor. */
   'tables.manage',
+  /** Marking a table available, being cleaned or switched off. */
+  'tables.status',
   'reservations.view',
   'reservations.manage',
   /** Bills and whether they are paid. */
@@ -103,7 +105,7 @@ export type StaffRole = (typeof STAFF_ROLES)[number];
 const MANAGER: Permission[] = [
   'dashboard.view', 'menu.view', 'menu.availability', 'menu.branch',
   'orders.view', 'orders.create', 'orders.update', 'orders.complete', 'orders.cancel',
-  'tables.view', 'tables.manage', 'reservations.view', 'reservations.manage',
+  'tables.view', 'tables.manage', 'tables.status', 'reservations.view', 'reservations.manage',
   'payments.view', 'payments.process', 'service.view', 'service.manage', 'promotions.manage',
   'analytics.view', 'analytics.financial', 'staff.view', 'staff.manage', 'roles.assign', 'settings.operational', 'kitchen.view',
   'attendance.view',
@@ -114,8 +116,8 @@ const MANAGER: Permission[] = [
 export const ROLE_PERMISSIONS: Record<RestaurantRole, readonly Permission[]> = {
   OWNER: PERMISSIONS,
   MANAGER,
-  CASHIER: ['dashboard.view', 'menu.view', 'orders.view', 'orders.complete', 'tables.view', 'payments.view', 'payments.process', 'cash.operate'],
-  WAITER: ['menu.view', 'orders.view', 'orders.create', 'tables.view', 'reservations.view', 'reservations.manage', 'service.view', 'service.manage'],
+  CASHIER: ['dashboard.view', 'menu.view', 'orders.view', 'orders.complete', 'tables.view', 'tables.status', 'payments.view', 'payments.process', 'cash.operate'],
+  WAITER: ['menu.view', 'orders.view', 'orders.create', 'tables.view', 'tables.status', 'reservations.view', 'reservations.manage', 'service.view', 'service.manage'],
   KITCHEN: ['kitchen.view', 'menu.availability', 'orders.view', 'orders.update', 'orders.complete', 'orders.cancel'],
 };
 
@@ -183,6 +185,7 @@ export const PERMISSION_LABELS: Record<Permission, [string, string]> = {
   'orders.cancel': ['يرفض أو يلغي الطلبات', 'Reject or cancel orders'],
   'tables.view': ['يشوف الطاولات', 'View tables'],
   'tables.manage': ['يدير الطاولات والمناطق', 'Manage tables and areas'],
+  'tables.status': ['يغيّر حالة الطاولة (متاحة، تنظيف، متوقفة)', 'Change table status (available, cleaning, off)'],
   'reservations.view': ['يشوف الحجوزات', 'View reservations'],
   'reservations.manage': ['يدير الحجوزات', 'Manage reservations'],
   'payments.view': ['يشوف الحسابات', 'View bills'],

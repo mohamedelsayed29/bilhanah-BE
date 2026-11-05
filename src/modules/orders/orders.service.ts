@@ -23,17 +23,22 @@ import {
   type PlaceOrderResponse,
   type PublicOrder,
   RESTAURANT_ERROR_CODES,
-  TABLE_OCCUPANCY_HOURS,
   TABLE_RESERVED_WINDOW,
+  TABLE_STATUS_TRANSITIONS,
+  type ManualTableStatus,
+  type TableStatus,
   UPCOMING_RESERVATION_STATUSES,
   type TableOccupancy,
   type ordersQuerySchema,
   type trackingStatsQuerySchema,
+  type transferOrderSchema,
   type updateOrderStatusSchema,
 } from '@bilhanah/contracts';
 import { Prisma } from '@bilhanah/database';
 import type { z } from 'zod';
 import { isUniqueViolation } from '../../infrastructure/database/prisma-errors.js';
+import { openOrdersOnTableWhere, openOrdersWhere, seatedWhere, tableStatusOf } from '../tables/occupancy.js';
+import { liveSessionWhere, seatingTableId } from '../table-sessions/session-lifecycle.js';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { MediaService } from '../media/media.service.js';
 import { effectiveItem } from '../branches/branch-menu.js';
@@ -55,6 +60,7 @@ const orderInclude = {
   restaurant: { select: { name: true, subdomain: true, phone: true, brandColor: true, logo: true } },
   branch: { select: { id: true, name: true, slug: true, phone: true, city: true, address: true, mapUrl: true, isMain: true } },
   statusEvents: { orderBy: { createdAt: 'asc' }, select: { status: true, createdAt: true, reason: true, actorName: true } },
+  tableTransfers: { orderBy: { createdAt: 'asc' }, select: { fromTableLabel: true, toTableLabel: true, createdAt: true, actorName: true, reason: true } },
   _count: { select: { pushSubscriptions: true } },
 } satisfies Prisma.OrderInclude;
 
@@ -256,6 +262,67 @@ export class OrdersService {
     const order = await this.prisma.order.findFirst({ where: { id: orderId, ...(await this.ownWhere(userId)) }, include: orderInclude });
     if (!order) throw orderNotFound();
     return this.toOwnerOrder(order);
+  }
+
+  /**
+   * Moves a dine-in order still open on its table to a free table of its branch (the guests changed tables). The
+   * order keeps its items, prices, notes, payment and history; only its table changes, with a transfer record.
+   * When nothing else is left on the old seating, its guests' session and seated booking follow, and the old
+   * table is to be cleaned.
+   */
+  async transfer(userId: string, orderId: string, input: z.output<typeof transferOrderSchema>, now = new Date()): Promise<OwnerOrder> {
+    const own = await this.ownWhere(userId);
+    const order = await this.prisma.order.findFirst({ where: { id: orderId, ...own }, select: { id: true, type: true, status: true, paidAt: true, tableId: true, tableLabel: true, branchId: true } });
+    if (!order) throw orderNotFound();
+    if (order.type !== 'DINE_IN' || UNBILLED_STATUSES.includes(order.status) || (order.status === 'COMPLETED' && order.paidAt)) {
+      throw new ConflictException({ code: ORDER_ERROR_CODES.ORDER_NOT_TRANSFERABLE, message: 'Only a dine-in order still open on its table can move.' });
+    }
+    const invalid = (status: string, message: string) => new ConflictException({ code: ORDER_ERROR_CODES.TABLE_TRANSFER_INVALID, message, details: { status } });
+    const tableSelect = { id: true, label: true, branchId: true, isActive: true, condition: true } as const;
+    const destination = await this.prisma.table.findFirst({ where: { id: input.tableId, branchId: order.branchId }, select: tableSelect });
+    if (!destination) throw new NotFoundException({ code: ORDER_ERROR_CODES.TABLE_NOT_FOUND, message: 'That table is not in this order’s branch.' });
+    // Orders typed in by hand ("Table 5") carry only the name.
+    const source = order.tableId
+      ? await this.prisma.table.findUnique({ where: { id: order.tableId }, select: tableSelect })
+      : await this.prisma.table.findFirst({ where: { branchId: order.branchId, label: order.tableLabel ?? '' }, select: tableSelect });
+    const sourceMembers = source ? await this.groupMembers(source.id) : [];
+    if (destination.id === source?.id || sourceMembers.some((member) => member.id === destination.id)) throw invalid('SAME', 'The order is already at that table.');
+    const status = await this.statusOf(destination, now);
+    if (status !== 'AVAILABLE') throw invalid(status, `That table is ${status.toLowerCase()}: pick a free one.`);
+    const destinationSeat = await seatingTableId(this.prisma, destination.id);
+    if (await this.prisma.tableGuest.count({ where: { session: { tableId: destinationSeat, ...liveSessionWhere(now) } } })) throw invalid('OCCUPIED', 'Other guests are at that table.');
+    const actor = await this.prisma.user.findUnique({ where: { id: userId }, select: { fullName: true } });
+
+    const freed = await this.prisma.$transaction(async (tx) => {
+      // Lock both tables (in a fixed order): two moves onto one free table cannot both go through.
+      const ids = [destination.id, ...(source ? [source.id] : [])].sort();
+      await tx.$queryRaw`SELECT id FROM tables WHERE id = ANY(${ids}::uuid[]) ORDER BY id FOR UPDATE`;
+      const taken = await tx.order.count({ where: { ...openOrdersOnTableWhere(destination, now), id: { not: order.id } } });
+      if (taken) throw invalid('OCCUPIED', 'Other guests are at that table.');
+      await tx.order.update({ where: { id: order.id }, data: { tableId: destination.id, tableLabel: destination.label } });
+      await tx.orderTableTransfer.create({
+        data: {
+          orderId: order.id, fromTableId: source?.id ?? null, fromTableLabel: source?.label ?? order.tableLabel ?? '', toTableId: destination.id, toTableLabel: destination.label,
+          actorId: userId, actorName: actor?.fullName ?? null, reason: input.reason ?? null, createdAt: now,
+        },
+      });
+      if (!source) return false;
+      // The rest of the party: anything still open on the old seating stays; otherwise the guests moved.
+      const left = await tx.order.count({ where: { ...openOrdersWhere(order.branchId, now), OR: sourceMembers.flatMap((member) => [{ tableId: member.id }, { tableId: null, tableLabel: member.label }]) } });
+      if (left) return false;
+      const sourceSeat = await seatingTableId(tx, source.id);
+      await tx.tableSession.updateMany({ where: { tableId: sourceSeat, status: { not: 'CLOSED' } }, data: { tableId: destinationSeat, lastActivityAt: now, version: { increment: 1 } } });
+      await tx.reservation.updateMany({ where: { tableId: { in: sourceMembers.map((member) => member.id) }, status: 'SEATED' }, data: { tableId: destination.id } });
+      await tx.table.updateMany({ where: { id: { in: sourceMembers.map((member) => member.id) } }, data: { condition: 'CLEANING', conditionAt: now } });
+      return true;
+    });
+
+    const saved = await this.prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: orderInclude });
+    const ownerView = this.toOwnerOrder(saved);
+    this.realtime.emitOrderUpdated(own.restaurantId, ownerView, this.toPublicOrder(saved));
+    this.realtime.emitTableUpdated(own.restaurantId, { branchId: order.branchId, tableId: destination.id, status: 'OCCUPIED' });
+    for (const member of sourceMembers) this.realtime.emitTableUpdated(own.restaurantId, { branchId: order.branchId, tableId: member.id, status: freed ? 'CLEANING' : 'OCCUPIED' });
+    return ownerView;
   }
 
   /** Moves an order along; only the transitions in ORDER_TRANSITIONS are allowed. */
@@ -532,6 +599,7 @@ export class OrdersService {
     const order = await this.prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: orderInclude });
     const ownerView = this.toOwnerOrder(order);
     if (changed) this.realtime.emitOrderUpdated(restaurantId, ownerView, this.toPublicOrder(order));
+    if (changed && paid && order.type === 'DINE_IN' && order.tableId) await this.cleanIfFreed(restaurantId, order.tableId, now);
     return ownerView;
   }
 
@@ -540,8 +608,12 @@ export class OrdersService {
   async floor(userId: string, branchId?: string, now = new Date()): Promise<TableOccupancy[]> {
     const scope = await this.scopes.resolve(userId);
     const branch = await this.scopes.branch(scope, branchId);
-    const [tables, open, bookings] = await Promise.all([
-      this.prisma.table.findMany({ where: { branchId: branch.id, isActive: true }, orderBy: { sortOrder: 'asc' }, select: { id: true, label: true, shape: true, seats: true, location: true, areaId: true } }),
+    const [tables, open, bookings, seatedParties] = await Promise.all([
+      this.prisma.table.findMany({
+        where: { branchId: branch.id, isActive: true },
+        orderBy: { sortOrder: 'asc' },
+        select: { id: true, label: true, shape: true, seats: true, location: true, areaId: true, condition: true, group: { select: { id: true, label: true, leadTableId: true, dissolvedAt: true } } },
+      }),
       this.prisma.order.findMany({
         where: this.openOnTableWhere(branch.id, now),
         orderBy: { placedAt: 'asc' },
@@ -561,9 +633,18 @@ export class OrdersService {
         orderBy: { reservedAt: 'asc' },
         select: { id: true, tableId: true, customerName: true, reservedAt: true, guests: true },
       }),
+      // Booked parties seated at a table keep it occupied until the bill is settled (at most SEATED_HOLD_HOURS).
+      this.prisma.reservation.findMany({
+        where: seatedWhere(branch.id, now),
+        orderBy: { reservedAt: 'desc' },
+        select: { id: true, tableId: true, customerName: true, reservedAt: true, guests: true },
+      }),
     ]);
-    return tables.map((table) => {
+    const party = (entry: { id: string; customerName: string; reservedAt: Date; guests: number }) =>
+      ({ id: entry.id, customerName: entry.customerName, reservedAt: entry.reservedAt.toISOString(), guests: entry.guests });
+    const rows = tables.map((table): TableOccupancy => {
       const booking = bookings.find((entry) => entry.tableId === table.id);
+      const seated = seatedParties.find((entry) => entry.tableId === table.id);
       // Orders typed in by hand ("Table 5") carry only the label.
       const orders = open.filter((order) => (order.tableId ? order.tableId === table.id : order.tableLabel === table.label));
       return {
@@ -573,10 +654,11 @@ export class OrdersService {
         seats: table.seats,
         location: table.location,
         areaId: table.areaId,
-        occupied: orders.length > 0,
-        reservation: booking && orders.length === 0
-          ? { id: booking.id, customerName: booking.customerName, reservedAt: booking.reservedAt.toISOString(), guests: booking.guests }
-          : null,
+        status: tableStatusOf({ isActive: true, occupied: orders.length > 0 || seated !== undefined, cleaning: table.condition === 'CLEANING', reserved: booking !== undefined }),
+        occupied: orders.length > 0 || seated !== undefined,
+        cleaning: table.condition === 'CLEANING',
+        reservation: booking && orders.length === 0 && !seated ? party(booking) : null,
+        seated: seated ? party(seated) : null,
         openOrders: orders.map((order) => ({
           id: order.id,
           number: order.number,
@@ -586,8 +668,10 @@ export class OrdersService {
         })),
         unpaidPiastres: orders.reduce((sum, order) => sum + order.subtotalPiastres, 0),
         since: orders[0]?.placedAt.toISOString() ?? null,
+        group: null,
       };
     });
+    return withGroups(rows, tables.map((table) => ({ id: table.id, group: table.group && !table.group.dissolvedAt ? table.group : null })));
   }
 
   /** The guests paid and left: marks every open order on the table paid, freeing it. */
@@ -597,9 +681,12 @@ export class OrdersService {
     const restaurantId = own.restaurantId;
     const table = await this.prisma.table.findFirst({ where: { id: tableId, ...own }, select: { id: true, label: true, branchId: true } });
     if (!table) throw new NotFoundException({ code: ORDER_ERROR_CODES.TABLE_NOT_FOUND, message: 'Table not found.' });
+    // A merged table's bill is the whole group's: every member is settled, cleaned and its session closed.
+    const members = await this.groupMembers(table.id);
+    const memberIds = members.map((member) => member.id);
     const where: Prisma.OrderWhereInput = {
       ...this.openOnTableWhere(table.branchId, now),
-      OR: [{ tableId: table.id }, { tableId: null, tableLabel: table.label }],
+      OR: members.flatMap((member) => [{ tableId: member.id }, { tableId: null, tableLabel: member.label }]),
     };
     const open = await this.prisma.order.findMany({ where, select: { id: true, subtotalPiastres: true } });
     const ids = open.map((order) => order.id);
@@ -616,8 +703,14 @@ export class OrdersService {
       const orders = await this.prisma.order.findMany({ where: { id: { in: ids } }, include: orderInclude });
       for (const order of orders) this.realtime.emitOrderUpdated(restaurantId, this.toOwnerOrder(order), this.toPublicOrder(order));
     }
+    // The guests have left: a booked party seated here is done, and the table is to be cleaned.
+    const seatedDone = await this.prisma.reservation.updateMany({ where: { tableId: { in: memberIds }, status: 'SEATED' }, data: { status: 'COMPLETED' } });
+    if (ids.length || seatedDone.count) {
+      await this.prisma.table.updateMany({ where: { id: { in: memberIds } }, data: { condition: 'CLEANING', conditionAt: now } });
+      for (const id of memberIds) this.realtime.emitTableUpdated(restaurantId, { branchId: table.branchId, tableId: id, status: 'CLEANING' });
+    }
     // The guests have left: their table session (shared order, service requests) ends with the bill.
-    const sessions = await this.prisma.tableSession.findMany({ where: { tableId: table.id, status: { not: 'CLOSED' } }, select: { id: true } });
+    const sessions = await this.prisma.tableSession.findMany({ where: { tableId: { in: memberIds }, status: { not: 'CLOSED' } }, select: { id: true } });
     if (sessions.length) {
       await this.prisma.tableSession.updateMany({
         where: { id: { in: sessions.map((session) => session.id) }, status: { not: 'CLOSED' } },
@@ -632,6 +725,84 @@ export class OrdersService {
   async touch(orderId: string): Promise<void> {
     const order = await this.prisma.order.update({ where: { id: orderId }, data: { updatedAt: new Date() }, include: orderInclude });
     this.realtime.emitOrderUpdated(order.restaurantId, this.toOwnerOrder(order), this.toPublicOrder(order));
+  }
+
+  /**
+   * Staff mark a table available, being cleaned or switched off (tables.status). Changes the table's status does
+   * not allow (TABLE_STATUS_TRANSITIONS) are refused: guests must be billed first. Returns the branch's floor.
+   */
+  async setTableStatus(userId: string, tableId: string, status: ManualTableStatus, now = new Date()): Promise<TableOccupancy[]> {
+    const scope = await this.scopes.resolve(userId);
+    this.scopes.require(scope, 'tables.status');
+    const own = await this.scopes.branchWhere(scope);
+    const table = await this.prisma.table.findFirst({ where: { id: tableId, ...own }, select: { id: true, label: true, branchId: true, isActive: true, condition: true } });
+    if (!table) throw new NotFoundException({ code: ORDER_ERROR_CODES.TABLE_NOT_FOUND, message: 'Table not found.' });
+    const members = await this.groupMembers(table.id);
+    // A merged table moves with its group; switching one off alone would split the party's seats.
+    if (members.length > 1 && status === 'UNAVAILABLE') {
+      throw new ConflictException({ code: ORDER_ERROR_CODES.TABLE_IN_GROUP, message: 'This table is merged with others: separate them first.' });
+    }
+    const current = await this.statusOf(table, now);
+    if (current !== status) {
+      if (!TABLE_STATUS_TRANSITIONS[current].includes(status)) {
+        throw new ConflictException({
+          code: ORDER_ERROR_CODES.TABLE_STATUS_INVALID,
+          message: current === 'OCCUPIED' ? 'Guests are at this table: settle its bill first.' : `A ${current.toLowerCase()} table cannot be marked ${status.toLowerCase()}.`,
+          details: { from: current, to: status },
+        });
+      }
+      await this.prisma.table.updateMany({
+        where: { id: { in: members.map((member) => member.id) } },
+        data: status === 'UNAVAILABLE' ? { isActive: false }
+          : { isActive: true, condition: status === 'CLEANING' ? 'CLEANING' : 'READY', conditionAt: now },
+      });
+      const after = await this.statusOf({ ...table, isActive: status !== 'UNAVAILABLE', condition: status === 'CLEANING' ? 'CLEANING' : status === 'AVAILABLE' ? 'READY' : table.condition }, now);
+      for (const member of members) this.realtime.emitTableUpdated(own.restaurantId, { branchId: table.branchId, tableId: member.id, status: after });
+    }
+    return this.floor(userId, table.branchId, now);
+  }
+
+  /** One table's status now, as the floor plan shows it. */
+  private async statusOf(table: { id: string; label: string; branchId: string; isActive: boolean; condition: 'READY' | 'CLEANING' }, now: Date) {
+    // A merged table has its group's status: anything on any member counts.
+    const members = await this.groupMembers(table.id);
+    const ids = members.map((member) => member.id);
+    const cleaning = members.length > 1 ? (await this.prisma.table.count({ where: { id: { in: ids }, condition: 'CLEANING' } })) > 0 : table.condition === 'CLEANING';
+    const [orders, seated, booked] = await Promise.all([
+      this.prisma.order.count({ where: { ...openOrdersWhere(table.branchId, now), OR: members.flatMap((member) => [{ tableId: member.id }, { tableId: null, tableLabel: member.label }]) } }),
+      this.prisma.reservation.count({ where: { ...seatedWhere(table.branchId, now), tableId: { in: ids } } }),
+      this.prisma.reservation.count({
+        where: {
+          tableId: { in: ids },
+          status: { in: [...UPCOMING_RESERVATION_STATUSES] },
+          reservedAt: { gte: new Date(now.getTime() - TABLE_RESERVED_WINDOW.afterMinutes * 60_000), lte: new Date(now.getTime() + TABLE_RESERVED_WINDOW.beforeMinutes * 60_000) },
+        },
+      }),
+    ]);
+    return tableStatusOf({ isActive: table.isActive, occupied: orders + seated > 0, cleaning, reserved: booked > 0 });
+  }
+
+  /** The table and, when it is merged, the rest of its group (lead first). */
+  async groupMembers(tableId: string): Promise<{ id: string; label: string }[]> {
+    const table = await this.prisma.table.findUnique({ where: { id: tableId }, select: { id: true, label: true, group: { select: { dissolvedAt: true, leadTableId: true, tables: { select: { id: true, label: true } } } } } });
+    if (!table) return [];
+    if (!table.group || table.group.dissolvedAt) return [{ id: table.id, label: table.label }];
+    const lead = table.group.leadTableId;
+    return [...table.group.tables].sort((a, b) => (a.id === lead ? -1 : b.id === lead ? 1 : 0));
+  }
+
+  /** An order on a table was paid: when nothing else keeps the table occupied, the guests have left and it is to be cleaned. */
+  private async cleanIfFreed(restaurantId: string, tableId: string, now: Date) {
+    const table = await this.prisma.table.findUnique({ where: { id: tableId }, select: { id: true, label: true, branchId: true, isActive: true, condition: true } });
+    if (!table?.isActive || table.condition === 'CLEANING') return;
+    const members = await this.groupMembers(table.id);
+    const [orders, seated] = await Promise.all([
+      this.prisma.order.count({ where: { ...openOrdersWhere(table.branchId, now), OR: members.flatMap((member) => [{ tableId: member.id }, { tableId: null, tableLabel: member.label }]) } }),
+      this.prisma.reservation.count({ where: { ...seatedWhere(table.branchId, now), tableId: { in: members.map((member) => member.id) } } }),
+    ]);
+    if (orders + seated > 0) return;
+    await this.prisma.table.updateMany({ where: { id: { in: members.map((member) => member.id) } }, data: { condition: 'CLEANING', conditionAt: now } });
+    for (const member of members) this.realtime.emitTableUpdated(restaurantId, { branchId: table.branchId, tableId: member.id, status: 'CLEANING' });
   }
 
   // --- Helpers -------------------------------------------------------------
@@ -698,13 +869,7 @@ export class OrdersService {
 
   /** Dine-in orders still on the bill: unpaid, not rejected or cancelled, and recent enough to count. */
   private openOnTableWhere(branchId: string, now: Date): Prisma.OrderWhereInput {
-    return {
-      branchId,
-      type: 'DINE_IN',
-      paidAt: null,
-      status: { notIn: UNBILLED_STATUSES },
-      placedAt: { gte: new Date(now.getTime() - TABLE_OCCUPANCY_HOURS * 60 * 60 * 1000) },
-    };
+    return openOrdersWhere(branchId, now);
   }
 
   /** Orders the caller may touch: their restaurant's, and only their branch's when tied to one. */
@@ -767,6 +932,7 @@ export class OrdersService {
       paymentMethod: order.paymentMethod,
       ...this.core(order),
       history: order.statusEvents.map((event) => ({ status: event.status, at: event.createdAt.toISOString(), reason: event.reason, actorName: event.actorName })),
+      transfers: order.tableTransfers.map((entry) => ({ fromTableLabel: entry.fromTableLabel, toTableLabel: entry.toTableLabel, at: entry.createdAt.toISOString(), actorName: entry.actorName, reason: entry.reason })),
     };
   }
 
@@ -792,4 +958,39 @@ export class OrdersService {
       },
     };
   }
+}
+
+/** The order in which a merged group takes its members' statuses: guests at any member make the whole group occupied. */
+const GROUP_STATUS_ORDER: TableStatus[] = ['OCCUPIED', 'CLEANING', 'RESERVED', 'AVAILABLE'];
+
+/**
+ * Merged tables share one status, their seats and their booking: each member of a group shows the group's
+ * status, and `group` lists the members (their own open orders stay on each row, so the group's bill is their sum).
+ */
+export function withGroups(rows: TableOccupancy[], memberships: { id: string; group: { id: string; label: string | null; leadTableId: string } | null }[]): TableOccupancy[] {
+  const groups = new Map<string, { id: string; label: string | null; leadTableId: string; rows: TableOccupancy[] }>();
+  for (const { id, group } of memberships) {
+    if (!group) continue;
+    const row = rows.find((entry) => entry.id === id);
+    if (!row) continue;
+    const entry = groups.get(group.id) ?? { ...group, rows: [] };
+    entry.rows.push(row);
+    groups.set(group.id, entry);
+  }
+  for (const group of groups.values()) {
+    const status = GROUP_STATUS_ORDER.find((candidate) => group.rows.some((row) => row.status === candidate)) ?? 'AVAILABLE';
+    const view = { id: group.id, label: group.label, leadTableId: group.leadTableId, tableIds: group.rows.map((row) => row.id), seats: group.rows.reduce((sum, row) => sum + row.seats, 0) };
+    const reservation = group.rows.find((row) => row.reservation)?.reservation ?? null;
+    const seated = group.rows.find((row) => row.seated)?.seated ?? null;
+    for (const row of group.rows) {
+      Object.assign(row, {
+        status, group: view,
+        occupied: status === 'OCCUPIED',
+        cleaning: group.rows.some((member) => member.cleaning),
+        reservation: status === 'OCCUPIED' ? null : reservation,
+        seated,
+      });
+    }
+  }
+  return rows;
 }

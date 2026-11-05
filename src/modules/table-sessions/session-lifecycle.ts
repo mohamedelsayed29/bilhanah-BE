@@ -13,6 +13,12 @@ export const liveSessionWhere = (now: Date): Prisma.TableSessionWhereInput => ({
   lastActivityAt: { gt: new Date(now.getTime() - SESSION_IDLE_MS) },
 });
 
+/** The table whose session a table's guests share: the lead table of its merged group, else itself. */
+export async function seatingTableId(db: Db | PrismaService, tableId: string): Promise<string> {
+  const row = await db.table.findUnique({ where: { id: tableId }, select: { group: { select: { leadTableId: true, dissolvedAt: true } } } });
+  return row?.group && !row.group.dissolvedAt ? row.group.leadTableId : tableId;
+}
+
 /**
  * The table's one open session, else a new one. Idle sessions are closed first (EXPIRED), and a
  * per-table advisory lock plus the partial unique index (one open session per table) mean two phones
@@ -23,6 +29,9 @@ export async function openSessionFor(
   table: { id: string; restaurantId: string; branchId: string },
   now = new Date(),
 ): Promise<TableSession> {
+  // Merged tables share their lead table's session.
+  const seatId = await seatingTableId(prisma, table.id);
+  if (seatId !== table.id) table = { ...table, id: seatId };
   const attempt = () => prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`table-session:${table.id}`}))`;
     await expireIdle(tx, { tableId: table.id }, now);

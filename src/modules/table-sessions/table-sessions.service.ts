@@ -30,7 +30,7 @@ import { TABLE_SESSION_TOKENS } from '../service-requests/session-token.js';
 import { hasAccess } from '../subscriptions/access.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
 import { TABLE_GUEST_TOKENS } from './guest-token.js';
-import { expireIdle, liveSessionWhere, openSessionFor } from './session-lifecycle.js';
+import { expireIdle, liveSessionWhere, openSessionFor, seatingTableId } from './session-lifecycle.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -91,7 +91,7 @@ export class TableSessionsService {
 
     const heldId = input.guestToken ? this.guestTokens.verify(input.guestToken) : null;
     const held = heldId
-      ? await this.prisma.tableGuest.findFirst({ where: { id: heldId, session: { tableId: table.id, ...liveSessionWhere(now) } } })
+      ? await this.prisma.tableGuest.findFirst({ where: { id: heldId, session: { tableId: await seatingTableId(this.prisma, table.id), ...liveSessionWhere(now) } } })
       : null;
     if (held) {
       await this.prisma.$transaction([

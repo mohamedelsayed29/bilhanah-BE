@@ -1,12 +1,13 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
+import { RealtimeModule } from '../realtime/realtime.module.js';
 import { ReservationsService } from './reservations.service.js';
 import { PublicTablesController, ReservationsController, TableAreasController, TablesController } from './tables.controller.js';
 import { TableAreasService } from './table-areas.service.js';
 import { TablesService } from './tables.service.js';
 
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, RealtimeModule],
   controllers: [TablesController, TableAreasController, ReservationsController, PublicTablesController],
   providers: [TablesService, TableAreasService, ReservationsService],
 })

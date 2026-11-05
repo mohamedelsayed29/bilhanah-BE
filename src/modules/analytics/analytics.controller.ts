@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Header, HttpCode, HttpStatus, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
-import { type BranchComparison, type PlatformStats, recordVisitSchema, type RestaurantStats, statsQuerySchema } from '@bilhanah/contracts';
+import { type BranchComparison, type PlatformStats, recordVisitSchema, type RestaurantStats, statsQuerySchema, type TableAnalytics, tableAnalyticsQuerySchema } from '@bilhanah/contracts';
 import type { Request } from 'express';
 import type { z } from 'zod';
 import { type AuthContext, CurrentAuth } from '../../common/decorators/current-auth.decorator.js';
@@ -8,6 +8,7 @@ import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.
 import { RequireAnyPermission, RequirePermission, RequireRole, RolesGuard } from '../../common/guards/roles.guard.js';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
 import { StatsService } from './stats.service.js';
+import { TableAnalyticsService } from './table-analytics.service.js';
 import { VisitsService } from './visits.service.js';
 
 /** Sent by a restaurant's menu page once per load. */
@@ -33,7 +34,19 @@ export class VisitsController {
 @UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
 @RequireAnyPermission('analytics.view', 'dashboard.view')
 export class RestaurantStatsController {
-  constructor(private readonly stats: StatsService) {}
+  constructor(
+    private readonly stats: StatsService,
+    private readonly tables: TableAnalyticsService,
+  ) {}
+
+  /** The tables' use and revenue over a period, by table (and area). */
+  @Get('tables')
+  @RequirePermission('analytics.view')
+  @Header('Cache-Control', 'no-store')
+  @RateLimit({ name: 'stats:ip', limit: 120, windowSeconds: 60, by: 'ip' })
+  tableStats(@CurrentAuth() auth: AuthContext, @Query(new ZodValidationPipe(tableAnalyticsQuerySchema)) query: z.output<typeof tableAnalyticsQuerySchema>): Promise<TableAnalytics> {
+    return this.tables.get(auth.userId, query);
+  }
 
   @Get()
   @Header('Cache-Control', 'no-store')

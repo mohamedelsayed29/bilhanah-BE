@@ -119,6 +119,9 @@ describe('roles and permissions', () => {
     const range = `from=${new Date().toISOString()}&to=${new Date(Date.now() + 86_400_000).toISOString()}`;
     expect((await http().get(`/v1/reservations?${range}`).set(auth(waiter.token)).expect(200)).body).toHaveLength(1);
     await http().post(`/v1/orders/tables/${tables[0].id}/settle`).set(auth(waiter.token)).expect(403);
+    // Waiters keep the floor up to date: a table being cleaned, then ready again.
+    await http().patch(`/v1/orders/tables/${tables[0].id}/status`).set(auth(waiter.token)).send({ status: 'CLEANING' }).expect(200);
+    await http().patch(`/v1/orders/tables/${tables[0].id}/status`).set(auth(waiter.token)).send({ status: 'AVAILABLE' }).expect(200);
     await http().get('/v1/restaurants/mine/stats?days=7').set(auth(waiter.token)).expect(403);
     await http().get('/v1/orders/tracking-stats?days=7').set(auth(waiter.token)).expect(403);
   });
@@ -133,6 +136,8 @@ describe('roles and permissions', () => {
     await status(kitchen.token, id, 'READY').expect(200);
     await http().patch(`/v1/orders/${id}/payment`).set(auth(kitchen.token)).send({ paid: true }).expect(403);
     await http().get('/v1/tables').set(auth(kitchen.token)).expect(403);
+    const table = await http().post('/v1/tables').set(auth(r.token)).send({ label: 'K1' }).expect(201);
+    await http().patch(`/v1/orders/tables/${table.body.id}/status`).set(auth(kitchen.token)).send({ status: 'CLEANING' }).expect(403);
     await http().get('/v1/reservations').set(auth(kitchen.token)).expect(403);
     await http().get('/v1/restaurants/mine/stats?days=7').set(auth(kitchen.token)).expect(403);
   });
