@@ -1141,6 +1141,7 @@ model Order {
 
   @@unique([restaurantId, idempotencyKey])
   @@unique([branchId, businessDay, number])
+  @@index([restaurantId, businessDay, branchId])
   @@index([restaurantId, status, placedAt])
   @@index([restaurantId, placedAt])
   @@index([branchId, status, placedAt])

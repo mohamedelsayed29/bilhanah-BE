@@ -33,6 +33,8 @@ RUN npm ci --ignore-scripts --omit=dev \
  && node -e "const fs=require('fs');const p=require('./package-lock.json').packages;for(const[k,v]of Object.entries(p))if(v.devOptional&&k.startsWith('node_modules/'))fs.rmSync(k,{recursive:true,force:true})"
 
 FROM base AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends chromium && rm -rf /var/lib/apt/lists/*
+COPY assets/reports assets/reports
 ENV NODE_ENV=production
 COPY --from=prod-deps /app/node_modules node_modules
 COPY --from=build /app/package.json ./

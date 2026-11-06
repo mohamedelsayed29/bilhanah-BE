@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ReportsModule } from './modules/reports/reports.module.js';
 import { APP_FILTER } from '@nestjs/core';
 import { CryptoModule } from './common/crypto/crypto.module.js';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
@@ -41,6 +42,7 @@ import { TableSessionsModule } from './modules/table-sessions/table-sessions.mod
 
 @Module({
   imports: [
+    ReportsModule,
     AppConfigModule,
     AppLoggerModule,
     CryptoModule,
