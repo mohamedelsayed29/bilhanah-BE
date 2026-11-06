@@ -40,7 +40,7 @@ export function configureApp(app: NestExpressApplication): void {
   app.enableCors((request: { url?: string }, callback) => {
     // Public routes serve every restaurant subdomain and the website, and never use cookies.
     if (request.url?.startsWith('/v1/public/')) {
-      callback(null, { origin: '*', methods: ['GET', 'POST', 'PATCH', 'DELETE'], credentials: false });
+      callback(null, { origin: '*', methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], credentials: false });
       return;
     }
     callback(null, { origin: dashboardOrigins, credentials: true });

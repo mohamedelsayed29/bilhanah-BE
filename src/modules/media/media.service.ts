@@ -18,6 +18,11 @@ const unsupported = () =>
     message: 'Upload a JPEG, PNG or WebP image.',
   });
 
+/** Where a review photo lives: under private/ until its review is published. */
+function reviewPhotoKey(restaurantId: string, mediaId: string, isPublic: boolean): string {
+  return `${isPublic ? '' : `${PRIVATE_PREFIX}/`}restaurants/${restaurantId}/reviews/${mediaId}`;
+}
+
 export const mediaNotFound = () =>
   new NotFoundException({ code: MEDIA_ERROR_CODES.MEDIA_NOT_FOUND, message: 'Image not found.' });
 
@@ -45,6 +50,14 @@ export class MediaService {
         message: 'This restaurant is suspended. Please contact Bilhanah support.',
       });
     }
+    return this.toImageSet(await this.store(restaurant.id, kind, file));
+  }
+
+  /**
+   * Re-encodes and stores an image for the restaurant (metadata stripped). Payment receipts and
+   * review photos are stored under private/, so they are never served publicly.
+   */
+  async store(restaurantId: string, kind: MediaKind, file: Buffer | undefined): Promise<Media> {
     if (!file?.length || !sniffImageType(file)) throw unsupported();
 
     let processed;
@@ -63,18 +76,20 @@ export class MediaService {
     const id = randomUUID();
     const storageKey =
       kind === 'PAYMENT_PROOF'
-        ? `${PRIVATE_PREFIX}/restaurants/${restaurant.id}/proofs/${id}`
-        : `restaurants/${restaurant.id}/media/${id}`;
+        ? `${PRIVATE_PREFIX}/restaurants/${restaurantId}/proofs/${id}`
+        : kind === 'REVIEW'
+          ? reviewPhotoKey(restaurantId, id, false)
+          : `restaurants/${restaurantId}/media/${id}`;
     await Promise.all(
       processed.renditions.map((rendition) =>
         this.storage.put(`${storageKey}/${rendition.width}.webp`, rendition.data, 'image/webp'),
       ),
     );
     try {
-      const media = await this.prisma.media.create({
+      return await this.prisma.media.create({
         data: {
           id,
-          restaurantId: restaurant.id,
+          restaurantId,
           kind,
           storageKey,
           width: processed.width,
@@ -83,10 +98,31 @@ export class MediaService {
           bytes: processed.renditions.reduce((sum, rendition) => sum + rendition.data.length, 0),
         },
       });
-      return this.toImageSet(media);
     } catch (error) {
       await this.storage.deletePrefix(storageKey).catch(() => undefined);
       throw error;
+    }
+  }
+
+  /**
+   * Makes review photos public (their review was published) or private again (hidden, removed).
+   * The renditions are copied to the other prefix, the record switched, then the old copy deleted,
+   * so a photo is always readable through its current key. Photos already where they belong are skipped.
+   */
+  async setReviewPhotosPublic(mediaIds: readonly string[], makePublic: boolean): Promise<void> {
+    if (!mediaIds.length) return;
+    const photos = await this.prisma.media.findMany({ where: { id: { in: [...mediaIds] }, kind: 'REVIEW' } });
+    for (const media of photos) {
+      const target = reviewPhotoKey(media.restaurantId, media.id, makePublic);
+      if (media.storageKey === target) continue;
+      for (const width of media.variantWidths) {
+        const data = await this.storage.get(`${media.storageKey}/${width}.webp`);
+        if (data) await this.storage.put(`${target}/${width}.webp`, data, 'image/webp');
+      }
+      await this.prisma.media.update({ where: { id: media.id }, data: { storageKey: target } });
+      await this.storage.deletePrefix(media.storageKey).catch((error: unknown) => {
+        this.logger.warn({ err: error, mediaId: media.id }, 'Could not delete the old copy of a review photo');
+      });
     }
   }
 
@@ -96,7 +132,7 @@ export class MediaService {
     if (!media) throw mediaNotFound();
   }
 
-  /** Public renditions. Private images (payment receipts) have none; read them with readPrivate. */
+  /** Public renditions. Private images (payment receipts, unpublished review photos) have none; read them with readImage. */
   toImageSet(media: Pick<Media, 'id' | 'storageKey' | 'width' | 'height' | 'variantWidths'>): ImageSet {
     if (media.storageKey.startsWith(`${PRIVATE_PREFIX}/`)) {
       return { id: media.id, width: media.width, height: media.height, sources: [], url: '' };
@@ -123,6 +159,7 @@ export class MediaService {
         coverFor: { none: {} },
         menuItems: { none: {} },
         paymentProofs: { none: {} },
+        reviewPhotos: { none: {} },
       },
       select: { id: true, storageKey: true },
       take: 500,

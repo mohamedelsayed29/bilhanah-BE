@@ -293,7 +293,8 @@ export class MenusService {
 
   private toPublicItem(item: ItemRow): PublicMenuItem {
     const { categoryId: _category, isVisible: _visible, stationId: _station, ...publicItem } = this.toOwnerItem(item);
-    return publicItem;
+    // Ratings change more often than the menu: they are attached after the cached part (ReviewsPublicService.withRatings).
+    return { ...publicItem, rating: null };
   }
 
   private toOwnerItem(item: ItemRow): OwnerMenuItem {
@@ -304,8 +305,8 @@ export class MenusService {
       nameEn: item.nameEn,
       descriptionAr: item.descriptionAr,
       descriptionEn: item.descriptionEn,
-      image: item.image ? this.media.toImageSet(item.image) : null,
       translations: asTranslations<'name' | 'description'>(item.translations),
+      image: item.image ? this.media.toImageSet(item.image) : null,
       isAvailable: item.isAvailable,
       isVisible: item.isVisible,
       stationId: item.stationId,
@@ -313,13 +314,13 @@ export class MenusService {
         id: variant.id,
         nameAr: variant.nameAr,
         nameEn: variant.nameEn,
-        pricePiastres: variant.pricePiastres,
         translations: asTranslations(variant.translations),
-      })),
+        pricePiastres: variant.pricePiastres,
         calories: variant.calories,
         portionValue: variant.portionValue,
         portionUnit: variant.portionUnit,
         serves: variant.serves,
+      })),
     };
   }
 }

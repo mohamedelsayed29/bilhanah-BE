@@ -31,6 +31,7 @@ import { MenusService } from '../menus/menus.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { hasAccess } from '../subscriptions/access.js';
 import { RecommendationsService } from '../recommendations/recommendations.service.js';
+import { ReviewsPublicService } from '../reviews/reviews-public.service.js';
 import { BranchScopeService, branchNotFound } from '../branches/branch-scope.service.js';
 import { orderingSettings } from '../branches/branches.service.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
@@ -76,6 +77,7 @@ export class RestaurantsService {
     private readonly realtime: RealtimeService,
     private readonly scopes: BranchScopeService,
     private readonly recommendations: RecommendationsService,
+    private readonly reviews: ReviewsPublicService,
     config: ConfigService<Env, true>,
   ) {
     this.urlTemplate = config.get('RESTAURANT_URL_TEMPLATE', { infer: true });
@@ -196,7 +198,9 @@ export class RestaurantsService {
   async findPublicMenu(rawSubdomain: string, branchSlug?: string): Promise<PublicMenuResponse> {
     const { row, branch, view } = await this.resolvePublic(rawSubdomain, branchSlug);
     if (view.availability !== 'AVAILABLE') return { restaurant: view, categories: [], recommendations: [] };
-    const categories = await this.menus.publicCategories(row.id, row.menuVersion, branch.id);
+    const menu = await this.menus.publicCategories(row.id, row.menuVersion, branch.id);
+    // Dish ratings are attached after the cached menu (they change more often than the menu).
+    const categories = view.reviews?.page ? await this.reviews.withRatings(row.id, menu) : menu;
     // Suggestions follow this branch's menu: only orderable dishes are offered.
     return { restaurant: view, categories, recommendations: await this.recommendations.publicFor(row.id, categories) };
   }
@@ -250,6 +254,7 @@ export class RestaurantsService {
       ...this.branding(restaurant, branch),
       branch: this.toPublicBranch(branch, access.features.ordering),
       branches: branches.map((candidate) => this.toPublicBranch(candidate, access.features.ordering)),
+      reviews: await this.reviews.info(restaurant.id, access.features.reviews),
     };
   }
 
@@ -263,6 +268,7 @@ export class RestaurantsService {
       city: branch.city,
       address: branch.address,
       mapUrl: branch.mapUrl,
+      googleReviewUrl: branch.googleReviewUrl,
       openingHours: hoursOf(branch),
       acceptingOrders: orderingIncluded && branch.orderingEnabled && !branch.ordersPaused,
     };
@@ -276,14 +282,14 @@ export class RestaurantsService {
       openingHours: hoursOf(branch),
       // A theme removed in a later release falls back to the default.
       menuTheme: isMenuTheme(restaurant.menuTheme) ? restaurant.menuTheme : DEFAULT_MENU_THEME,
+      // A language dropped from a later release is simply no longer offered.
+      menuLanguages: restaurant.menuLanguages.filter(isExtraMenuLanguage),
     };
   }
 
   private async toOwnerRestaurant(restaurant: RestaurantRow, now = new Date()): Promise<OwnerRestaurant> {
     const [access, main, branchCount] = await Promise.all([
       this.subscriptions.accessFor(restaurant, now),
-      // A language dropped from a later release is simply no longer offered.
-      menuLanguages: restaurant.menuLanguages.filter(isExtraMenuLanguage),
       this.scopes.mainBranch(restaurant.id),
       this.prisma.branch.count({ where: { restaurantId: restaurant.id, isActive: true } }),
     ]);

@@ -27,4 +27,7 @@ export * from './recommendations.js';
 export * from './kitchen-display.js';
 export * from './attendance.js';
 export * from './cash.js';
+export * from './inventory.js';
+export * from './review-display.js';
+export * from './reviews.js';
 export * from './table-sessions.js';

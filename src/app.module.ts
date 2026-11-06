@@ -34,6 +34,8 @@ import { RecommendationsModule } from './modules/recommendations/recommendations
 import { KitchenDisplayModule } from './modules/kitchen-display/kitchen-display.module.js';
 import { AttendanceModule } from './modules/attendance/attendance.module.js';
 import { CashModule } from './modules/cash/cash.module.js';
+import { InventoryModule } from './modules/inventory/inventory.module.js';
+import { ReviewsModule } from './modules/reviews/reviews.module.js';
 import { TableSessionsModule } from './modules/table-sessions/table-sessions.module.js';
 
 @Module({
@@ -65,6 +67,8 @@ import { TableSessionsModule } from './modules/table-sessions/table-sessions.mod
     KitchenDisplayModule,
     AttendanceModule,
     CashModule,
+    InventoryModule,
+    ReviewsModule,
     TableSessionsModule,
     OrdersModule,
     KitchenModule,

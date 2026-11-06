@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import type { ImageSet } from './media.js';
+import type { MenuItemRating } from './review-display.js';
+import { EXTRA_MENU_LANGUAGES, NUTRITION_LIMITS, PORTION_UNITS, type Translations, type VariantNutrition } from './menu-languages.js';
 
 export const MENU_ERROR_CODES = {
   CATEGORY_NOT_FOUND: 'CATEGORY_NOT_FOUND',
@@ -25,8 +27,6 @@ const optionalText = (max: number) =>
     .nullable()
     .optional();
 
-export const createCategorySchema = z.strictObject({
-  nameAr: requiredText(80),
 /**
  * Text in extra menu languages: { fr: { name, description? } }. Blank fields and
  * languages are dropped, so sending '' removes a translation.
@@ -51,10 +51,12 @@ export const categoryTranslationsSchema = translationsSchema({ name: 80 });
 export const itemTranslationsSchema = translationsSchema({ name: 100, description: 500 });
 export const variantTranslationsSchema = translationsSchema({ name: 40 });
 
+export const createCategorySchema = z.strictObject({
+  nameAr: requiredText(80),
   nameEn: optionalText(80),
+  translations: categoryTranslationsSchema.optional(),
   isVisible: z.boolean().optional(),
   /** The kitchen station preparing its dishes; null for the default station. */
-  translations: categoryTranslationsSchema.optional(),
   stationId: z.uuid().nullable().optional(),
 });
 
@@ -103,9 +105,9 @@ const itemFields = {
   nameEn: optionalText(100),
   descriptionAr: optionalText(500),
   descriptionEn: optionalText(500),
+  translations: itemTranslationsSchema.optional(),
   imageId: z.uuid().nullable().optional(),
   isAvailable: z.boolean().optional(),
-  translations: itemTranslationsSchema.optional(),
   isVisible: z.boolean().optional(),
   /** Its own kitchen station; null follows the category's. */
   stationId: z.uuid().nullable().optional(),
@@ -131,9 +133,9 @@ export type MenuVariant = {
   id: string;
   nameAr: string | null;
   nameEn: string | null;
+  translations: Translations<'name'>;
   pricePiastres: number;
 } & VariantNutrition;
-  translations: Translations<'name'>;
 
 export type OwnerMenuItem = {
   id: string;
@@ -142,10 +144,10 @@ export type OwnerMenuItem = {
   nameEn: string | null;
   descriptionAr: string | null;
   descriptionEn: string | null;
-  image: ImageSet | null;
-  isAvailable: boolean;
   /** Name and description in the restaurant's extra menu languages. */
   translations: Translations<'name' | 'description'>;
+  image: ImageSet | null;
+  isAvailable: boolean;
   isVisible: boolean;
   variants: MenuVariant[];
   /** Its own kitchen station; null follows the category's. */
@@ -156,9 +158,9 @@ export type OwnerMenuCategory = {
   id: string;
   nameAr: string;
   nameEn: string | null;
+  translations: Translations<'name'>;
   isVisible: boolean;
   /** The kitchen station preparing its dishes; null for the default station. */
-  translations: Translations<'name'>;
   stationId: string | null;
   items: OwnerMenuItem[];
 };
@@ -166,12 +168,15 @@ export type OwnerMenuCategory = {
 /** The owner's full menu, hidden entries included, in display order. */
 export type OwnerMenu = { categories: OwnerMenuCategory[] };
 
-export type PublicMenuItem = Omit<OwnerMenuItem, 'categoryId' | 'isVisible' | 'stationId'>;
+export type PublicMenuItem = Omit<OwnerMenuItem, 'categoryId' | 'isVisible' | 'stationId'> & {
+  /** Diners' rating of the dish (docs/REVIEWS.md); null below menuMinCount ratings or when reviews are not shown. */
+  rating: MenuItemRating | null;
+};
 
 export type PublicMenuCategory = {
   id: string;
   nameAr: string;
   nameEn: string | null;
+  translations: Translations<'name'>;
   items: PublicMenuItem[];
 };
-  translations: Translations<'name'>;

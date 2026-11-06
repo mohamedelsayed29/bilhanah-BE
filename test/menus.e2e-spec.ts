@@ -379,7 +379,7 @@ describe('website endpoints', () => {
       ['ORDERS', 35000],
       ['ADVANCED', 50000],
     ]);
-    expect(response.body[2].features).toEqual({ menu: true, ordering: true, readyAlerts: true, branches: 10 });
+    expect(response.body[2].features).toEqual({ menu: true, ordering: true, readyAlerts: true, inventory: true, reviews: true, branches: 10 });
   });
 
   it('forwards contact messages and drops bot submissions', async () => {

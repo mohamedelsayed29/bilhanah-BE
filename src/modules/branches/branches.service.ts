@@ -374,6 +374,7 @@ export class BranchesService {
       city: branch.city,
       address: branch.address,
       mapUrl: branch.mapUrl,
+      googleReviewUrl: branch.googleReviewUrl,
       openingHours: hoursOf(branch),
       ordering: orderingSettings(branch, access.features.ordering),
       publicUrl: branch.isMain ? base : `${base}/?b=${branch.slug}`,

@@ -33,7 +33,33 @@ describe('restaurant permissions', () => {
   });
 
   it('lets managers grant only what they hold', () => {
-    expect(grantablePermissions('CASHIER', effectivePermissions('MANAGER'))).toEqual(['cash.adjust', 'cash.view']);
-    expect(grantablePermissions('CASHIER', effectivePermissions('MANAGER', ['payments.refund']))).toEqual(['payments.refund', 'cash.adjust', 'cash.view']);
+    const managerInventory = ['inventory.view', 'inventory.waste', 'inventory.operate', 'inventory.costs'];
+    const managerReviews = ['reviews.view', 'reviews.respond', 'reviews.moderate'];
+    expect(grantablePermissions('CASHIER', effectivePermissions('MANAGER'))).toEqual(['cash.adjust', 'cash.view', ...managerInventory, ...managerReviews]);
+    expect(grantablePermissions('CASHIER', effectivePermissions('MANAGER', ['payments.refund']))).toEqual(['payments.refund', 'cash.adjust', 'cash.view', ...managerInventory, ...managerReviews]);
+  });
+
+  it('lets the owner grant every inventory permission to every staff role, on top of the defaults', () => {
+    const inventory = ['inventory.view', 'inventory.waste', 'inventory.operate', 'inventory.manage', 'inventory.costs', 'inventory.approve'] as const;
+    for (const role of ['MANAGER', 'CASHIER', 'WAITER', 'KITCHEN'] as const) {
+      expect(effectivePermissions(role, [...inventory])).toEqual(expect.arrayContaining([...inventory]));
+    }
+    expect(ROLE_PERMISSIONS.MANAGER).toEqual(expect.arrayContaining(['inventory.view', 'inventory.waste', 'inventory.operate', 'inventory.costs']));
+    expect(ROLE_PERMISSIONS.MANAGER).not.toContain('inventory.manage');
+    expect(ROLE_PERMISSIONS.KITCHEN).toEqual(expect.arrayContaining(['inventory.view', 'inventory.waste']));
+    expect(ROLE_PERMISSIONS.KITCHEN).not.toContain('inventory.costs');
+    // A manager passes on only what they hold: not inventory.manage until granted it.
+    expect(grantablePermissions('KITCHEN', effectivePermissions('MANAGER')).filter((permission) => permission.startsWith('inventory.'))).toEqual(['inventory.operate', 'inventory.costs']);
+    expect(grantablePermissions('KITCHEN', effectivePermissions('MANAGER', ['inventory.manage'])).filter((permission) => permission.startsWith('inventory.'))).toEqual(['inventory.operate', 'inventory.manage', 'inventory.costs']);
+  });
+
+  it('lets the owner grant every reviews permission to every staff role; managers pass on all but the settings', () => {
+    const reviews = ['reviews.view', 'reviews.respond', 'reviews.moderate', 'reviews.settings'] as const;
+    for (const role of ['MANAGER', 'CASHIER', 'WAITER', 'KITCHEN'] as const) {
+      expect(effectivePermissions(role, [...reviews])).toEqual(expect.arrayContaining([...reviews]));
+    }
+    expect(ROLE_PERMISSIONS.MANAGER).toEqual(expect.arrayContaining(['reviews.view', 'reviews.respond', 'reviews.moderate']));
+    expect(ROLE_PERMISSIONS.MANAGER).not.toContain('reviews.settings');
+    expect(grantablePermissions('WAITER', effectivePermissions('MANAGER')).filter((permission) => permission.startsWith('reviews.'))).toEqual(['reviews.view', 'reviews.respond', 'reviews.moderate']);
   });
 });

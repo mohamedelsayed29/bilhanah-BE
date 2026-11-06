@@ -12,10 +12,12 @@ export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
 export const MEDIA_MIN_DIMENSION = 200;
 export const MEDIA_ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 
-export const mediaKindSchema = z.enum(['LOGO', 'COVER', 'ITEM', 'PAYMENT_PROOF']);
+/** REVIEW: a diner's review photo, private until the review is published (uploaded through the review routes only). */
+export const mediaKindSchema = z.enum(['LOGO', 'COVER', 'ITEM', 'PAYMENT_PROOF', 'REVIEW']);
 export type MediaKind = z.infer<typeof mediaKindSchema>;
 
-export const uploadMediaQuerySchema = z.strictObject({ kind: mediaKindSchema });
+/** What restaurants upload through /v1/media. */
+export const uploadMediaQuerySchema = z.strictObject({ kind: z.enum(['LOGO', 'COVER', 'ITEM', 'PAYMENT_PROOF']) });
 
 /** A processed image: WebP renditions to use in `srcset`, smallest first. */
 export type ImageSet = {

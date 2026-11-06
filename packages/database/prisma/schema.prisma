@@ -116,6 +116,22 @@ model User {
   reviewedCashShifts       CashShift[]              @relation("CashShiftReviewer")
   cashTransactions         CashTransaction[]        @relation("CashTransactionCreator")
   approvedCashTransactions CashTransaction[]        @relation("CashTransactionApprover")
+  inventorySettingsChanges InventorySettings[]
+  stockMovements           StockMovement[]
+  createdPurchases         Purchase[]               @relation("PurchaseCreator")
+  receivedPurchases        Purchase[]               @relation("PurchaseReceiver")
+  voidedPurchases          Purchase[]               @relation("PurchaseVoider")
+  wasteEntries             WasteEntry[]
+  createdStockCounts       StockCount[]             @relation("StockCountCreator")
+  postedStockCounts        StockCount[]             @relation("StockCountPoster")
+  submittedStockCounts     StockCount[]             @relation("StockCountSubmitter")
+  stockTransfers           StockTransfer[]
+  reviewSettingsChanges    ReviewSettings[]
+  reviewReplies            Review[]                 @relation("ReviewReplier")
+  reviewModerations        Review[]                 @relation("ReviewModerator")
+  reviewFollowUps          Review[]                 @relation("ReviewAssignee")
+  reviewEvents             ReviewEvent[]            @relation("ReviewEventActor")
+  reviewEventAssignments   ReviewEvent[]            @relation("ReviewEventAssignee")
 
   @@index([staffRestaurantId])
   @@index([staffBranchId])
@@ -207,6 +223,8 @@ model Restaurant {
   brandColor                    String?          @map("brand_color") @db.Char(7)
   /// Look of the public menu (contracts: MENU_THEMES).
   menuTheme                     String           @default("classic") @map("menu_theme") @db.VarChar(30)
+  /// Extra languages the menu is offered in besides Arabic and English (contracts: EXTRA_MENU_LANGUAGES), in order.
+  menuLanguages                 String[]         @default([]) @map("menu_languages")
   /// Bumped on every change to the public menu (including branch overrides); part of its cache key.
   menuVersion                   Int              @default(0) @map("menu_version")
   /// Kitchen display: when an order turns ready on its own (every dish ready), or only by hand.
@@ -223,8 +241,6 @@ model Restaurant {
   categories            Category[]
   menuItems             MenuItem[]
   payments              SubscriptionPayment[]
-  /// Extra languages the menu is offered in besides Arabic and English (contracts: EXTRA_MENU_LANGUAGES), in order.
-  menuLanguages                 String[]         @default([]) @map("menu_languages")
   reminders             ExpiryReminder[]
   tables                Table[]
   tableAreas            TableArea[]
@@ -247,6 +263,17 @@ model Restaurant {
   cashRegisters         CashRegister[]
   cashShifts            CashShift[]
   cashTransactions      CashTransaction[]
+  inventorySettings     InventorySettings?
+  ingredients           Ingredient[]
+  suppliers             Supplier[]
+  inventoryStock        InventoryStock[]
+  stockMovements        StockMovement[]
+  purchases             Purchase[]
+  wasteEntries          WasteEntry[]
+  stockCounts           StockCount[]
+  stockTransfers        StockTransfer[]
+  reviewSettings        ReviewSettings?
+  reviews               Review[]
 
   @@map("restaurants")
 }
@@ -271,6 +298,8 @@ model Branch {
   address         String   @db.VarChar(200)
   /// A Google Maps (or any map) link for directions.
   mapUrl          String?  @map("map_url") @db.VarChar(2048)
+  /// The branch's "write a review" link on Google, offered to happy diners (docs/REVIEWS.md).
+  googleReviewUrl String?  @map("google_review_url") @db.VarChar(2048)
   /// Weekly opening hours (contracts openingHoursSchema); null when not set.
   openingHours    Json?    @map("opening_hours")
   /// The branch has switched ordering on (it also needs a plan with ordering).
@@ -283,8 +312,8 @@ model Branch {
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  restaurant           Restaurant            @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  staff                User[]                @relation("BranchStaff")
+  restaurant           Restaurant               @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  staff                User[]                   @relation("BranchStaff")
   tables               Table[]
   tableAreas           TableArea[]
   reservations         Reservation[]
@@ -303,6 +332,15 @@ model Branch {
   cashRegisters        CashRegister[]
   cashShifts           CashShift[]
   cashTransactions     CashTransaction[]
+  inventoryStock       InventoryStock[]
+  stockMovements       StockMovement[]
+  purchases            Purchase[]
+  wasteEntries         WasteEntry[]
+  stockCounts          StockCount[]
+  transfersOut         StockTransfer[]          @relation("TransferFrom")
+  transfersIn          StockTransfer[]          @relation("TransferTo")
+  inventorySettings    InventoryBranchSettings?
+  reviews              Review[]
 
   @@unique([restaurantId, slug])
   @@index([restaurantId, sortOrder])
@@ -311,10 +349,10 @@ model Branch {
 
 /// A branch's own take on a shared dish. Missing row: the dish behaves as on the shared menu.
 model BranchMenuItem {
-  branchId    String   @map("branch_id") @db.Uuid
-  itemId      String   @map("item_id") @db.Uuid
+  branchId           String   @map("branch_id") @db.Uuid
+  itemId             String   @map("item_id") @db.Uuid
   /// null follows the shared menu; false marks the dish sold out at this branch only.
-  isAvailable Boolean? @map("is_available")
+  isAvailable        Boolean? @map("is_available")
   /// The branch does not offer this dish at all.
   isHidden           Boolean  @default(false) @map("is_hidden")
   /// The sold-out mark (isAvailable false) was set by inventory (auto sold-out), which may clear it
@@ -351,6 +389,8 @@ enum MediaKind {
   ITEM
   /// A transfer receipt. Stored under private/ and never served publicly.
   PAYMENT_PROOF
+  /// A diner's review photo: under private/ until the review is published, then public.
+  REVIEW
 
   @@map("media_kind")
 }
@@ -374,6 +414,7 @@ model Media {
   coverFor      Restaurant[]          @relation("RestaurantCover")
   menuItems     MenuItem[]
   paymentProofs SubscriptionPayment[]
+  reviewPhotos  ReviewPhoto[]
 
   @@index([restaurantId])
   @@map("media")
@@ -384,6 +425,8 @@ model Category {
   restaurantId String   @map("restaurant_id") @db.Uuid
   nameAr       String   @map("name_ar") @db.VarChar(80)
   nameEn       String?  @map("name_en") @db.VarChar(80)
+  /// Names in extra menu languages: { "fr": { "name": "…" } } (contracts: Translations).
+  translations Json     @default("{}")
   sortOrder    Int      @map("sort_order")
   isVisible    Boolean  @default(true) @map("is_visible")
   /// The kitchen station that prepares its dishes (a dish may choose another); the default station when null.
@@ -407,6 +450,8 @@ model MenuItem {
   nameEn        String?  @map("name_en") @db.VarChar(100)
   descriptionAr String?  @map("description_ar") @db.VarChar(500)
   descriptionEn String?  @map("description_en") @db.VarChar(500)
+  /// Name and description in extra menu languages: { "fr": { "name": "…", "description": "…" } }.
+  translations  Json     @default("{}")
   imageId       String?  @map("image_id") @db.Uuid
   /// False while sold out; the item stays listed.
   isAvailable   Boolean  @default(true) @map("is_available")
@@ -426,10 +471,9 @@ model MenuItem {
   branchOverrides     BranchMenuItem[]
   recommendationRules RecommendationRule[]
   recommendedIn       RecommendationRuleItem[]
+  reviewRatings       ReviewDishRating[]
 
   @@index([categoryId, sortOrder])
-  /// Names in extra menu languages: { "fr": { "name": "…" } } (contracts: Translations).
-  translations Json     @default("{}")
   @@index([restaurantId])
   @@map("menu_items")
 }
@@ -455,6 +499,10 @@ model MenuItemVariant {
   item          MenuItem                 @relation(fields: [itemId], references: [id], onDelete: Cascade)
   branchPrices  BranchVariantPrice[]
   recommendedIn RecommendationRuleItem[]
+  /// Its recipe (inventory): ingredient lines.
+  recipeLines   RecipeLine[]
+  orderItems    OrderItem[]
+  wasteLines    WasteLine[]
 
   @@index([itemId, sortOrder])
   @@map("menu_item_variants")
@@ -462,8 +510,6 @@ model MenuItemVariant {
 
 /// Reference data inserted by migration. Prices are in piastres.
 model Plan {
-  /// Name and description in extra menu languages: { "fr": { "name": "…", "description": "…" } }.
-  translations  Json     @default("{}")
   code                 PlanCode @id
   priceMonthlyPiastres Int      @map("price_monthly_piastres")
   createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -499,10 +545,6 @@ model Entitlement {
   @@map("entitlements")
 }
 
-  /// Its recipe (inventory): ingredient lines.
-  recipeLines   RecipeLine[]
-  orderItems    OrderItem[]
-  wasteLines    WasteLine[]
 /// Global defaults for new trials; a single row with id 1.
 model TrialSettings {
   id           Int      @id @default(1)
@@ -697,6 +739,15 @@ model TableArea {
   @@map("table_areas")
 }
 
+/// How a menu size's portion is measured.
+enum PortionUnit {
+  GRAM
+  ML
+  PIECE
+
+  @@map("portion_unit")
+}
+
 enum TableShape {
   ROUND
   SQUARE
@@ -746,15 +797,6 @@ enum RecommendationType {
 
 enum RecommendationPlacement {
   PRODUCT_DETAILS
-/// How a menu size's portion is measured.
-enum PortionUnit {
-  GRAM
-  ML
-  PIECE
-
-  @@map("portion_unit")
-}
-
   CART
   CHECKOUT
 
@@ -1021,6 +1063,10 @@ model Order {
   readyNotifiedAt  DateTime?           @map("ready_notified_at") @db.Timestamptz(3)
   /// Rush orders go to the top of the kitchen display.
   priority         OrderPriority       @default(NORMAL)
+  /// Inventory WARN policy: dishes whose recipe the branch's stock could not cover when it was placed.
+  lowStockItemIds  String[]            @default([]) @map("low_stock_item_ids") @db.Uuid
+  /// When its recipes were deducted from stock (inventory deductOn reached); null until then.
+  stockDeductedAt  DateTime?           @map("stock_deducted_at") @db.Timestamptz(3)
   updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   restaurant        Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
@@ -1033,6 +1079,8 @@ model Order {
   cashTransactions  CashTransaction[]
   tableSession      TableSession?      @relation(fields: [tableSessionId], references: [id], onDelete: SetNull)
   tableCartItems    TableCartItem[]
+  stockMovements    StockMovement[]
+  review            Review?
 
   @@unique([restaurantId, idempotencyKey])
   @@unique([branchId, businessDay, number])
@@ -1063,10 +1111,6 @@ model OrderItem {
   /// The kitchen station it was routed to when placed (null: the default station); the name is a copy.
   stationId               String?                  @map("station_id") @db.Uuid
   stationName             String?                  @map("station_name") @db.VarChar(40)
-  /// Inventory WARN policy: dishes whose recipe the branch's stock could not cover when it was placed.
-  lowStockItemIds  String[]            @default([]) @map("low_stock_item_ids") @db.Uuid
-  /// When its recipes were deducted from stock (inventory deductOn reached); null until then.
-  stockDeductedAt  DateTime?           @map("stock_deducted_at") @db.Timestamptz(3)
   /// Preparation on the kitchen display, with when it reached each step.
   prepStatus              OrderItemStatus          @default(NEW) @map("prep_status")
   acceptedAt              DateTime?                @map("accepted_at") @db.Timestamptz(3)
@@ -1077,13 +1121,21 @@ model OrderItem {
   /// Who added it in a shared table session; the name is a copy.
   guestId                 String?                  @map("guest_id") @db.Uuid
   guestName               String?                  @map("guest_name") @db.VarChar(30)
+  /// The size ordered, while it still exists (its recipe is what the line deducts).
+  variantId               String?                  @map("variant_id") @db.Uuid
+  /// What the line's ingredients cost (whole line, all its quantity), set when the order is accepted
+  /// and its stock deducted; null without a recipe or inventory.
+  costPiastres            Int?                     @map("cost_piastres")
 
   order              Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
   guest              TableGuest?         @relation(fields: [guestId], references: [id], onDelete: SetNull)
   menuItem           MenuItem?           @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+  variant            MenuItemVariant?    @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  stockMovements     StockMovement[]
   recommendationRule RecommendationRule? @relation(fields: [recommendationRuleId], references: [id], onDelete: SetNull)
   station            KitchenStation?     @relation(fields: [stationId], references: [id], onDelete: SetNull)
   events             OrderItemEvent[]
+  reviewRatings      ReviewDishRating[]
 
   @@index([orderId])
   @@index([stationId])
@@ -1121,17 +1173,10 @@ enum KitchenStationKind {
   MAIN
   GRILL
   DRINKS
-  /// The size ordered, while it still exists (its recipe is what the line deducts).
-  variantId               String?                  @map("variant_id") @db.Uuid
-  /// What the line's ingredients cost (whole line, all its quantity), set when the order is accepted
-  /// and its stock deducted; null without a recipe or inventory.
-  costPiastres            Int?                     @map("cost_piastres")
   DESSERTS
   COLD
   BAKERY
   OTHER
-  variant            MenuItemVariant?    @relation(fields: [variantId], references: [id], onDelete: SetNull)
-  stockMovements     StockMovement[]
 
   @@map("kitchen_station_kind")
 }
@@ -1914,4 +1959,728 @@ model TableCartItem {
   @@index([sessionId, status])
   @@index([orderId])
   @@map("table_cart_items")
+}
+
+// --- Inventory, recipes and costs (docs/INVENTORY.md) -----------------------------------------------
+
+enum IngredientKind {
+  /// Bought and stocked.
+  RAW
+  /// Made in-house from its recipe; holds no stock (using it uses its components).
+  PREPARED
+
+  @@map("ingredient_kind")
+}
+
+/// Base unit: grams (MASS), millilitres (VOLUME) or pieces (COUNT).
+enum InventoryDimension {
+  MASS
+  VOLUME
+  COUNT
+
+  @@map("inventory_dimension")
+}
+
+enum StockMovementType {
+  PURCHASE
+  PURCHASE_VOID
+  SALE
+  SALE_REVERSAL
+  WASTE
+  COUNT_VARIANCE
+  TRANSFER_IN
+  TRANSFER_OUT
+
+  @@map("stock_movement_type")
+}
+
+enum PurchaseStatus {
+  DRAFT
+  RECEIVED
+  VOID
+
+  @@map("purchase_status")
+}
+
+enum StockCountStatus {
+  OPEN
+  /// Posted by someone without inventory.approve while a variance is above the threshold: waits for approval.
+  PENDING_APPROVAL
+  POSTED
+  CANCELLED
+
+  @@map("stock_count_status")
+}
+
+/// When an order's stock is deducted: on reaching this status (or a later one).
+enum InventoryDeductOn {
+  ACCEPTED
+  READY
+  COMPLETED
+
+  @@map("inventory_deduct_on")
+}
+
+/// What placing an order does when the branch's stock cannot cover its recipes.
+enum InventoryStockPolicy {
+  ALLOW_NEGATIVE
+  /// Placed, flagged on the order (lowStockItemIds) and in the low-stock report.
+  WARN
+  /// Refused with 409 INSUFFICIENT_STOCK.
+  BLOCK_ORDERS
+
+  @@map("inventory_stock_policy")
+}
+
+/// The unit cost reports and costing value stock at.
+enum InventoryValuationBasis {
+  AVERAGE
+  STANDARD
+
+  @@map("inventory_valuation_basis")
+}
+
+/// The owner's inventory rules (defaults when missing: contracts DEFAULT_INVENTORY_SETTINGS).
+model InventorySettings {
+  restaurantId                  String                  @id @map("restaurant_id") @db.Uuid
+  enabled                       Boolean                 @default(false)
+  deductOn                      InventoryDeductOn       @default(ACCEPTED) @map("deduct_on")
+  stockPolicy                   InventoryStockPolicy    @default(ALLOW_NEGATIVE) @map("stock_policy")
+  autoSoldOut                   Boolean                 @default(true) @map("auto_sold_out")
+  autoRestore                   Boolean                 @default(true) @map("auto_restore")
+  valuationBasis                InventoryValuationBasis @default(AVERAGE) @map("valuation_basis")
+  /// [{ code, nameAr, nameEn }]; null uses the defaults (contracts DEFAULT_WASTE_REASONS).
+  wasteReasons                  Json?                   @map("waste_reasons")
+  requireCountApproval          Boolean                 @default(false) @map("require_count_approval")
+  countVarianceThresholdPercent Decimal                 @default(10) @map("count_variance_threshold_percent") @db.Decimal(7, 2)
+  updatedById                   String?                 @map("updated_by_id") @db.Uuid
+  updatedAt                     DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  updatedBy  User?      @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("inventory_settings")
+}
+
+/// A branch's own take on some inventory rules; null follows the restaurant's.
+model InventoryBranchSettings {
+  branchId     String                @id @map("branch_id") @db.Uuid
+  restaurantId String                @map("restaurant_id") @db.Uuid
+  stockPolicy  InventoryStockPolicy? @map("stock_policy")
+  autoSoldOut  Boolean?              @map("auto_sold_out")
+  autoRestore  Boolean?              @map("auto_restore")
+  updatedAt    DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId])
+  @@map("inventory_branch_settings")
+}
+
+model Supplier {
+  id           String   @id @default(uuid()) @db.Uuid
+  restaurantId String   @map("restaurant_id") @db.Uuid
+  name         String   @db.VarChar(80)
+  phone        String?  @db.VarChar(30)
+  email        String?  @db.VarChar(254)
+  note         String?  @db.VarChar(300)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant  Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  ingredients Ingredient[]
+  purchases   Purchase[]
+
+  @@unique([restaurantId, name])
+  @@map("inventory_suppliers")
+}
+
+/// Something stocked or used. Quantities everywhere are in its base unit (see InventoryDimension).
+model Ingredient {
+  id                  String             @id @default(uuid()) @db.Uuid
+  restaurantId        String             @map("restaurant_id") @db.Uuid
+  nameAr              String             @map("name_ar") @db.VarChar(80)
+  nameEn              String?            @map("name_en") @db.VarChar(80)
+  /// Free text grouping for stock lists and valuation.
+  category            String?            @db.VarChar(40)
+  kind                IngredientKind     @default(RAW)
+  dimension           InventoryDimension
+  /// Piastres per base unit, used at a branch until it has an average cost.
+  standardCost        Decimal?           @map("standard_cost") @db.Decimal(14, 4)
+  /// Prepared ingredients: base units the recipe makes.
+  yieldQuantity       Decimal?           @map("yield_quantity") @db.Decimal(14, 3)
+  preferredSupplierId String?            @map("preferred_supplier_id") @db.Uuid
+  /// Used as the reorder point at branches that have not set their own.
+  defaultReorderPoint Decimal?           @map("default_reorder_point") @db.Decimal(14, 3)
+  isActive            Boolean            @default(true) @map("is_active")
+  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant        Restaurant          @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  preferredSupplier Supplier?           @relation(fields: [preferredSupplierId], references: [id], onDelete: SetNull)
+  units             IngredientUnit[]
+  /// Its own recipe (prepared ingredients).
+  recipe            RecipeLine[]        @relation("PreparedRecipe")
+  /// Recipe lines (of dishes and prepared ingredients) that use it.
+  usedIn            RecipeLine[]        @relation("RecipeComponent")
+  stock             InventoryStock[]
+  movements         StockMovement[]
+  purchaseLines     PurchaseLine[]
+  wasteLines        WasteLine[]
+  countLines        StockCountLine[]
+  transferLines     StockTransferLine[]
+
+  @@unique([restaurantId, nameAr])
+  @@index([restaurantId, kind])
+  @@map("ingredients")
+}
+
+/// A purchase unit of an ingredient: factor base units each (kg = 1000 g).
+model IngredientUnit {
+  id           String  @id @default(uuid()) @db.Uuid
+  ingredientId String  @map("ingredient_id") @db.Uuid
+  nameAr       String  @map("name_ar") @db.VarChar(40)
+  nameEn       String? @map("name_en") @db.VarChar(40)
+  factor       Decimal @db.Decimal(14, 3)
+  sortOrder    Int     @map("sort_order")
+
+  ingredient    Ingredient     @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  purchaseLines PurchaseLine[]
+
+  @@unique([ingredientId, nameAr])
+  @@map("ingredient_units")
+}
+
+/// A line of a recipe: of a dish size (variantId) or of a prepared ingredient (preparedIngredientId),
+/// exactly one of them (CHECK in SQL).
+model RecipeLine {
+  id                   String  @id @default(uuid()) @db.Uuid
+  variantId            String? @map("variant_id") @db.Uuid
+  preparedIngredientId String? @map("prepared_ingredient_id") @db.Uuid
+  ingredientId         String  @map("ingredient_id") @db.Uuid
+  /// Base units as served.
+  quantity             Decimal @db.Decimal(14, 3)
+  /// Trimming and loss, 0–90: usage = quantity / (1 − waste% / 100).
+  wastePercent         Decimal @default(0) @map("waste_percent") @db.Decimal(5, 2)
+  sortOrder            Int     @map("sort_order")
+
+  variant            MenuItemVariant? @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  preparedIngredient Ingredient?      @relation("PreparedRecipe", fields: [preparedIngredientId], references: [id], onDelete: Cascade)
+  ingredient         Ingredient       @relation("RecipeComponent", fields: [ingredientId], references: [id], onDelete: NoAction)
+
+  @@unique([variantId, ingredientId])
+  @@unique([preparedIngredientId, ingredientId])
+  @@index([ingredientId])
+  @@map("recipe_lines")
+}
+
+/// An ingredient at a branch: on hand (base units), weighted average cost and reorder levels.
+model InventoryStock {
+  branchId     String   @map("branch_id") @db.Uuid
+  ingredientId String   @map("ingredient_id") @db.Uuid
+  restaurantId String   @map("restaurant_id") @db.Uuid
+  /// May go negative: a sale is never blocked by stock.
+  onHand       Decimal  @default(0) @map("on_hand") @db.Decimal(14, 3)
+  /// Piastres per base unit; null until the branch has received it.
+  avgCost      Decimal? @map("avg_cost") @db.Decimal(14, 4)
+  reorderPoint Decimal? @map("reorder_point") @db.Decimal(14, 3)
+  parLevel     Decimal? @map("par_level") @db.Decimal(14, 3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@id([branchId, ingredientId])
+  @@index([restaurantId])
+  @@index([ingredientId])
+  @@map("inventory_stock")
+}
+
+/// The stock ledger: immutable, the only way stock changes. A unique source key per movement makes
+/// every posting idempotent ("sale:{orderItemId}:{ingredientId}", "purchase:{lineId}"…).
+model StockMovement {
+  id           String            @id @default(uuid()) @db.Uuid
+  restaurantId String            @map("restaurant_id") @db.Uuid
+  branchId     String            @map("branch_id") @db.Uuid
+  ingredientId String            @map("ingredient_id") @db.Uuid
+  type         StockMovementType
+  /// Signed base units (never zero): positive adds stock.
+  quantity     Decimal           @db.Decimal(14, 3)
+  /// Piastres per base unit the movement was valued at.
+  unitCost     Decimal           @map("unit_cost") @db.Decimal(14, 4)
+  /// quantity × unitCost: signed piastres.
+  value        Decimal           @db.Decimal(16, 2)
+  onHandAfter  Decimal           @map("on_hand_after") @db.Decimal(14, 3)
+  avgCostAfter Decimal?          @map("avg_cost_after") @db.Decimal(14, 4)
+  sourceKey    String            @unique @map("source_key") @db.VarChar(160)
+  purchaseId   String?           @map("purchase_id") @db.Uuid
+  orderId      String?           @map("order_id") @db.Uuid
+  orderItemId  String?           @map("order_item_id") @db.Uuid
+  wasteId      String?           @map("waste_id") @db.Uuid
+  countId      String?           @map("count_id") @db.Uuid
+  transferId   String?           @map("transfer_id") @db.Uuid
+  note         String?           @db.VarChar(300)
+  createdById  String?           @map("created_by_id") @db.Uuid
+  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  restaurant Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch     Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  ingredient Ingredient     @relation(fields: [ingredientId], references: [id], onDelete: NoAction)
+  purchase   Purchase?      @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  order      Order?         @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  orderItem  OrderItem?     @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+  waste      WasteEntry?    @relation(fields: [wasteId], references: [id], onDelete: SetNull)
+  count      StockCount?    @relation(fields: [countId], references: [id], onDelete: SetNull)
+  transfer   StockTransfer? @relation(fields: [transferId], references: [id], onDelete: SetNull)
+  createdBy  User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([branchId, ingredientId, createdAt])
+  @@index([restaurantId, type, createdAt])
+  @@index([ingredientId])
+  @@index([orderItemId])
+  @@index([orderId])
+  @@index([purchaseId])
+  @@map("stock_movements")
+}
+
+/// Goods received from a supplier at a branch (an invoice): DRAFT → RECEIVED (posts stock) → VOID (reverses).
+model Purchase {
+  id            String         @id @default(uuid()) @db.Uuid
+  restaurantId  String         @map("restaurant_id") @db.Uuid
+  branchId      String         @map("branch_id") @db.Uuid
+  supplierId    String?        @map("supplier_id") @db.Uuid
+  /// A copy, kept if the supplier is renamed or deleted.
+  supplierName  String?        @map("supplier_name") @db.VarChar(80)
+  invoiceNumber String?        @map("invoice_number") @db.VarChar(60)
+  invoiceDate   DateTime?      @map("invoice_date") @db.Date
+  status        PurchaseStatus @default(DRAFT)
+  note          String?        @db.VarChar(300)
+  /// Piastres: the lines' totals.
+  total         Decimal        @default(0) @db.Decimal(16, 2)
+  createdById   String?        @map("created_by_id") @db.Uuid
+  receivedAt    DateTime?      @map("received_at") @db.Timestamptz(3)
+  receivedById  String?        @map("received_by_id") @db.Uuid
+  voidedAt      DateTime?      @map("voided_at") @db.Timestamptz(3)
+  voidedById    String?        @map("voided_by_id") @db.Uuid
+  voidReason    String?        @map("void_reason") @db.VarChar(300)
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch     Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  supplier   Supplier?       @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  createdBy  User?           @relation("PurchaseCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  receivedBy User?           @relation("PurchaseReceiver", fields: [receivedById], references: [id], onDelete: SetNull)
+  voidedBy   User?           @relation("PurchaseVoider", fields: [voidedById], references: [id], onDelete: SetNull)
+  lines      PurchaseLine[]
+  movements  StockMovement[]
+
+  @@index([restaurantId, createdAt])
+  @@index([branchId, status, createdAt])
+  @@index([supplierId])
+  @@map("inventory_purchases")
+}
+
+/// quantity of a unit (factor base units each) at unitPrice piastres per unit.
+model PurchaseLine {
+  id           String  @id @default(uuid()) @db.Uuid
+  purchaseId   String  @map("purchase_id") @db.Uuid
+  ingredientId String  @map("ingredient_id") @db.Uuid
+  /// The unit chosen (null: the base unit); its names and factor are copies.
+  unitId       String? @map("unit_id") @db.Uuid
+  unitNameAr   String? @map("unit_name") @db.VarChar(40)
+  unitNameEn   String? @map("unit_name_en") @db.VarChar(40)
+  factor       Decimal @default(1) @db.Decimal(14, 3)
+  quantity     Decimal @db.Decimal(14, 3)
+  baseQuantity Decimal @map("base_quantity") @db.Decimal(14, 3)
+  unitPrice    Decimal @map("unit_price") @db.Decimal(16, 4)
+  lineTotal    Decimal @map("line_total") @db.Decimal(16, 2)
+  sortOrder    Int     @map("sort_order")
+
+  purchase   Purchase        @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  ingredient Ingredient      @relation(fields: [ingredientId], references: [id], onDelete: NoAction)
+  unit       IngredientUnit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  @@index([purchaseId])
+  @@index([ingredientId])
+  @@map("inventory_purchase_lines")
+}
+
+/// Stock thrown away or given away at a branch, with a reason; posted at once.
+model WasteEntry {
+  id           String   @id @default(uuid()) @db.Uuid
+  restaurantId String   @map("restaurant_id") @db.Uuid
+  branchId     String   @map("branch_id") @db.Uuid
+  /// A code from the restaurant's waste reasons (settings); its names are copied, so editing the list keeps history.
+  reason       String   @db.VarChar(40)
+  reasonNameAr String   @map("reason_name_ar") @db.VarChar(60)
+  reasonNameEn String?  @map("reason_name_en") @db.VarChar(60)
+  note         String?  @db.VarChar(300)
+  /// Piastres at the average cost.
+  total        Decimal  @default(0) @db.Decimal(16, 2)
+  createdById  String?  @map("created_by_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  restaurant Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch     Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  createdBy  User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  lines      WasteLine[]
+  movements  StockMovement[]
+
+  @@index([restaurantId, createdAt])
+  @@index([branchId, createdAt])
+  @@map("inventory_waste")
+}
+
+/// An ingredient (quantity in base units) or whole dishes of a size (their recipe is wasted).
+model WasteLine {
+  id           String  @id @default(uuid()) @db.Uuid
+  wasteId      String  @map("waste_id") @db.Uuid
+  ingredientId String? @map("ingredient_id") @db.Uuid
+  variantId    String? @map("variant_id") @db.Uuid
+  /// Copies, kept if the ingredient or dish changes.
+  nameAr       String  @map("name_ar") @db.VarChar(150)
+  nameEn       String? @map("name_en") @db.VarChar(150)
+  /// The unit an ingredient line was entered in (null: the base unit), names copied.
+  unitNameAr   String? @map("unit_name") @db.VarChar(40)
+  unitNameEn   String? @map("unit_name_en") @db.VarChar(40)
+  /// Base units (ingredient) or dishes (size).
+  quantity     Decimal @db.Decimal(14, 3)
+  value        Decimal @default(0) @db.Decimal(16, 2)
+  sortOrder    Int     @map("sort_order")
+
+  waste      WasteEntry       @relation(fields: [wasteId], references: [id], onDelete: Cascade)
+  ingredient Ingredient?      @relation(fields: [ingredientId], references: [id], onDelete: NoAction)
+  variant    MenuItemVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([wasteId])
+  @@index([ingredientId])
+  @@map("inventory_waste_lines")
+}
+
+/// A stocktake at a branch. Expected quantities are snapshotted when it is created; posting books
+/// counted − expected as COUNT_VARIANCE. One open (or pending) count per branch (partial unique index in SQL).
+model StockCount {
+  id            String           @id @default(uuid()) @db.Uuid
+  restaurantId  String           @map("restaurant_id") @db.Uuid
+  branchId      String           @map("branch_id") @db.Uuid
+  status        StockCountStatus @default(OPEN)
+  note          String?          @db.VarChar(300)
+  createdById   String?          @map("created_by_id") @db.Uuid
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// Sent for approval (PENDING_APPROVAL), and the approver's or rejecter's note.
+  submittedAt   DateTime?        @map("submitted_at") @db.Timestamptz(3)
+  submittedById String?          @map("submitted_by_id") @db.Uuid
+  reviewNote    String?          @map("review_note") @db.VarChar(300)
+  postedAt      DateTime?        @map("posted_at") @db.Timestamptz(3)
+  postedById    String?          @map("posted_by_id") @db.Uuid
+  cancelledAt   DateTime?        @map("cancelled_at") @db.Timestamptz(3)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant  Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch      Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  createdBy   User?            @relation("StockCountCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  postedBy    User?            @relation("StockCountPoster", fields: [postedById], references: [id], onDelete: SetNull)
+  submittedBy User?            @relation("StockCountSubmitter", fields: [submittedById], references: [id], onDelete: SetNull)
+  lines       StockCountLine[]
+  movements   StockMovement[]
+
+  @@index([restaurantId, createdAt])
+  @@index([branchId, status])
+  @@map("inventory_counts")
+}
+
+model StockCountLine {
+  countId      String   @map("count_id") @db.Uuid
+  ingredientId String   @map("ingredient_id") @db.Uuid
+  expected     Decimal  @db.Decimal(14, 3)
+  counted      Decimal? @db.Decimal(14, 3)
+  /// Piastres per base unit when posted.
+  unitCost     Decimal? @map("unit_cost") @db.Decimal(14, 4)
+
+  count      StockCount @relation(fields: [countId], references: [id], onDelete: Cascade)
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id], onDelete: NoAction)
+
+  @@id([countId, ingredientId])
+  @@index([ingredientId])
+  @@map("inventory_count_lines")
+}
+
+/// Stock moved from one branch to another at the sender's average cost, posted in one step.
+model StockTransfer {
+  id           String   @id @default(uuid()) @db.Uuid
+  restaurantId String   @map("restaurant_id") @db.Uuid
+  fromBranchId String   @map("from_branch_id") @db.Uuid
+  toBranchId   String   @map("to_branch_id") @db.Uuid
+  note         String?  @db.VarChar(300)
+  total        Decimal  @default(0) @db.Decimal(16, 2)
+  createdById  String?  @map("created_by_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  restaurant Restaurant          @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  fromBranch Branch              @relation("TransferFrom", fields: [fromBranchId], references: [id], onDelete: Cascade)
+  toBranch   Branch              @relation("TransferTo", fields: [toBranchId], references: [id], onDelete: Cascade)
+  createdBy  User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  lines      StockTransferLine[]
+  movements  StockMovement[]
+
+  @@index([restaurantId, createdAt])
+  @@index([fromBranchId, createdAt])
+  @@index([toBranchId, createdAt])
+  @@map("inventory_transfers")
+}
+
+model StockTransferLine {
+  id           String  @id @default(uuid()) @db.Uuid
+  transferId   String  @map("transfer_id") @db.Uuid
+  ingredientId String  @map("ingredient_id") @db.Uuid
+  quantity     Decimal @db.Decimal(14, 3)
+  unitCost     Decimal @map("unit_cost") @db.Decimal(14, 4)
+  value        Decimal @db.Decimal(16, 2)
+  sortOrder    Int     @map("sort_order")
+
+  transfer   StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  ingredient Ingredient    @relation(fields: [ingredientId], references: [id], onDelete: NoAction)
+
+  @@index([transferId])
+  @@index([ingredientId])
+  @@map("inventory_transfer_lines")
+}
+
+// --- Feedback and reviews (docs/REVIEWS.md) ---------------------------------------------------------
+
+enum ReviewAskAfter {
+  READY
+  COMPLETED
+
+  @@map("review_ask_after")
+}
+
+enum ReviewDishScale {
+  THUMBS
+  STARS
+
+  @@map("review_dish_scale")
+}
+
+enum ReviewPublishMode {
+  AUTO
+  MANUAL
+  NEVER
+
+  @@map("review_publish_mode")
+}
+
+enum ReviewDisplayName {
+  FIRST_NAME_INITIAL
+  FIRST_NAME
+  ANONYMOUS
+
+  @@map("review_display_name")
+}
+
+enum ReviewStatus {
+  /// Waiting for moderation (or kept private while publishing is NEVER).
+  PENDING
+  PUBLISHED
+  /// Hidden by a moderator, with a reason.
+  HIDDEN
+
+  @@map("review_status")
+}
+
+enum ReviewSource {
+  /// Proven by the order's tracking link: verified.
+  ORDER
+  /// Unverified feedback from a table QR code.
+  TABLE
+  /// Unverified feedback from the menu.
+  MENU
+
+  @@map("review_source")
+}
+
+enum ReviewFollowUpStatus {
+  OPEN
+  CONTACTED
+  RESOLVED
+
+  @@map("review_follow_up_status")
+}
+
+enum ReviewEventKind {
+  CREATED
+  EDITED
+  PUBLISHED
+  HIDDEN
+  REPLIED
+  REPLY_REMOVED
+  FOLLOW_UP
+
+  @@map("review_event_kind")
+}
+
+/// What diners are asked, what is published, and alerts. A missing row means the defaults.
+model ReviewSettings {
+  restaurantId         String            @id @map("restaurant_id") @db.Uuid
+  enabled              Boolean           @default(false)
+  askAfter             ReviewAskAfter    @default(COMPLETED) @map("ask_after")
+  allowUnverified      Boolean           @default(false) @map("allow_unverified")
+  /// Extra 1–5 ratings asked (contracts REVIEW_SUB_RATINGS).
+  subRatings           String[]          @default(["food", "service"]) @map("sub_ratings")
+  dishRatings          Boolean           @default(true) @map("dish_ratings")
+  dishRatingScale      ReviewDishScale   @default(THUMBS) @map("dish_rating_scale")
+  /// A comment is required below this overall rating (0: never).
+  commentRequiredBelow Int               @default(3) @map("comment_required_below") @db.SmallInt
+  photos               Boolean           @default(true)
+  /// [{ code, nameAr, nameEn, sentiment }]; null uses the defaults (contracts DEFAULT_REVIEW_TAGS).
+  tags                 Json?
+  publishMode          ReviewPublishMode @default(AUTO) @map("publish_mode")
+  publishMinStars      Int               @default(1) @map("publish_min_stars") @db.SmallInt
+  showOnMenu           Boolean           @default(false) @map("show_on_menu")
+  menuMinCount         Int               @default(3) @map("menu_min_count")
+  googlePrompt         Boolean           @default(true) @map("google_prompt")
+  googleMinStars       Int               @default(4) @map("google_min_stars") @db.SmallInt
+  /// Reviews below this alert the restaurant (0 or 1: never).
+  alertBelowStars      Int               @default(3) @map("alert_below_stars") @db.SmallInt
+  editWindowHours      Int               @default(24) @map("edit_window_hours")
+  displayName          ReviewDisplayName @default(FIRST_NAME_INITIAL) @map("display_name")
+  updatedById          String?           @map("updated_by_id") @db.Uuid
+  updatedAt            DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  updatedBy  User?      @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("review_settings")
+}
+
+/// A diner's review of a visit: verified (one per order, proven by its tracking link) or
+/// unverified feedback from a table QR or the menu.
+model Review {
+  id                 String                @id @default(uuid()) @db.Uuid
+  restaurantId       String                @map("restaurant_id") @db.Uuid
+  branchId           String                @map("branch_id") @db.Uuid
+  /// The reviewed order; one review per order. Null for unverified feedback.
+  orderId            String?               @unique @map("order_id") @db.Uuid
+  source             ReviewSource
+  verified           Boolean
+  /// Unverified feedback from a table: its label when sent (a copy).
+  tableLabel         String?               @map("table_label") @db.VarChar(40)
+  overall            Int                   @db.SmallInt
+  foodRating         Int?                  @map("food_rating") @db.SmallInt
+  serviceRating      Int?                  @map("service_rating") @db.SmallInt
+  valueRating        Int?                  @map("value_rating") @db.SmallInt
+  speedRating        Int?                  @map("speed_rating") @db.SmallInt
+  cleanlinessRating  Int?                  @map("cleanliness_rating") @db.SmallInt
+  atmosphereRating   Int?                  @map("atmosphere_rating") @db.SmallInt
+  /// Tag codes (the restaurant's settings name them).
+  tags               String[]              @default([])
+  comment            String?               @db.VarChar(1000)
+  authorName         String?               @map("author_name") @db.VarChar(40)
+  /// Kept only with the diner's consent; never public.
+  contactPhone       String?               @map("contact_phone") @db.VarChar(20)
+  contactConsent     Boolean               @default(false) @map("contact_consent")
+  language           Language              @default(ar)
+  /// sha256 of the browser's edit key; edits must present the same key.
+  editKeyHash        String?               @map("edit_key_hash") @db.Char(64)
+  /// Fixed when the review is created (editWindowHours then).
+  editableUntil      DateTime              @map("editable_until") @db.Timestamptz(3)
+  editCount          Int                   @default(0) @map("edit_count")
+  status             ReviewStatus          @default(PENDING)
+  publishedAt        DateTime?             @map("published_at") @db.Timestamptz(3)
+  hiddenAt           DateTime?             @map("hidden_at") @db.Timestamptz(3)
+  hiddenReason       String?               @map("hidden_reason") @db.VarChar(300)
+  /// The last moderator decision (publish or hide).
+  moderatedById      String?               @map("moderated_by_id") @db.Uuid
+  moderatedAt        DateTime?             @map("moderated_at") @db.Timestamptz(3)
+  replyText          String?               @map("reply_text") @db.VarChar(1000)
+  /// The first reply (for reply times); replyUpdatedAt the latest edit.
+  repliedAt          DateTime?             @map("replied_at") @db.Timestamptz(3)
+  replyUpdatedAt     DateTime?             @map("reply_updated_at") @db.Timestamptz(3)
+  repliedById        String?               @map("replied_by_id") @db.Uuid
+  followUpStatus     ReviewFollowUpStatus? @map("follow_up_status")
+  followUpAssigneeId String?               @map("follow_up_assignee_id") @db.Uuid
+  followUpUpdatedAt  DateTime?             @map("follow_up_updated_at") @db.Timestamptz(3)
+  /// The low-rating alert went out (once per review).
+  alertedAt          DateTime?             @map("alerted_at") @db.Timestamptz(3)
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant       Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch           Branch             @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  order            Order?             @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  moderatedBy      User?              @relation("ReviewModerator", fields: [moderatedById], references: [id], onDelete: SetNull)
+  repliedBy        User?              @relation("ReviewReplier", fields: [repliedById], references: [id], onDelete: SetNull)
+  followUpAssignee User?              @relation("ReviewAssignee", fields: [followUpAssigneeId], references: [id], onDelete: SetNull)
+  dishRatings      ReviewDishRating[]
+  photos           ReviewPhoto[]
+  events           ReviewEvent[]
+
+  @@index([restaurantId, createdAt(sort: Desc)])
+  @@index([branchId, createdAt(sort: Desc)])
+  @@index([restaurantId, status, publishedAt(sort: Desc)])
+  @@index([restaurantId, overall])
+  @@index([followUpAssigneeId])
+  @@map("reviews")
+}
+
+/// A diner's rating of one dish of their order (thumbs are stored as 5 / 1). Names are copies.
+model ReviewDishRating {
+  id          String   @id @default(uuid()) @db.Uuid
+  reviewId    String   @map("review_id") @db.Uuid
+  orderItemId String?  @map("order_item_id") @db.Uuid
+  menuItemId  String?  @map("menu_item_id") @db.Uuid
+  nameAr      String   @map("name_ar") @db.VarChar(100)
+  nameEn      String?  @map("name_en") @db.VarChar(100)
+  rating      Int      @db.SmallInt
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  review    Review     @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  orderItem OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+  menuItem  MenuItem?  @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+
+  @@unique([reviewId, orderItemId])
+  @@index([menuItemId])
+  @@map("review_dish_ratings")
+}
+
+/// A photo attached to a review (media kind REVIEW).
+model ReviewPhoto {
+  reviewId  String @map("review_id") @db.Uuid
+  mediaId   String @unique @map("media_id") @db.Uuid
+  sortOrder Int    @map("sort_order") @db.SmallInt
+
+  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  media  Media  @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@id([reviewId, mediaId])
+  @@map("review_photos")
+}
+
+/// The review's history: the diner's edits (with the rating before), moderation, replies and follow-ups.
+model ReviewEvent {
+  id              String                @id @default(uuid()) @db.Uuid
+  reviewId        String                @map("review_id") @db.Uuid
+  kind            ReviewEventKind
+  /// Null for the diner.
+  actorId         String?               @map("actor_id") @db.Uuid
+  actorName       String?               @map("actor_name") @db.VarChar(100)
+  followUpStatus  ReviewFollowUpStatus? @map("follow_up_status")
+  assigneeId      String?               @map("assignee_id") @db.Uuid
+  assigneeName    String?               @map("assignee_name") @db.VarChar(100)
+  /// The follow-up note (internal) or the reason a review was hidden.
+  note            String?               @db.VarChar(500)
+  previousOverall Int?                  @map("previous_overall") @db.SmallInt
+  /// EDITED: the whole review before the edit.
+  metadata        Json?
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  review   Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  actor    User?  @relation("ReviewEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  assignee User?  @relation("ReviewEventAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  @@index([reviewId, createdAt])
+  @@map("review_events")
 }
