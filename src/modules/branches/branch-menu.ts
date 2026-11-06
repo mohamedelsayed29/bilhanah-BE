@@ -1,4 +1,4 @@
-import type { BranchItemOverride, MenuVariant } from '@bilhanah/contracts';
+import type { BranchItemOverride } from '@bilhanah/contracts';
 
 // How a branch's overrides change the shared menu. Pure, so the owner's branch
 // menu, the public menu and order pricing all agree (and it is unit-tested).
@@ -20,7 +20,8 @@ export function toOverrides(items: readonly ItemOverrideRow[], prices: readonly 
   };
 }
 
-type SharedItem = { id: string; isAvailable: boolean; isVisible: boolean; variants: readonly MenuVariant[] };
+type PricedVariant = { id: string; pricePiastres: number };
+type SharedItem<Variant extends PricedVariant = PricedVariant> = { id: string; isAvailable: boolean; isVisible: boolean; variants: readonly Variant[] };
 
 /** What the branch changed about this dish, in the shape the dashboard edits. */
 export function itemOverride(item: SharedItem, overrides: BranchOverrides): BranchItemOverride {
@@ -38,7 +39,10 @@ export function itemOverride(item: SharedItem, overrides: BranchOverrides): Bran
  * shared menu: not visible. Sold out: the branch's own mark when it has one,
  * otherwise the shared one. Prices: the branch's where set.
  */
-export function effectiveItem(item: SharedItem, overrides: BranchOverrides): { available: boolean; visible: boolean; variants: MenuVariant[] } {
+export function effectiveItem<Variant extends PricedVariant>(
+  item: SharedItem<Variant>,
+  overrides: BranchOverrides,
+): { available: boolean; visible: boolean; variants: Variant[] } {
   const row = overrides.items.get(item.id);
   return {
     visible: item.isVisible && !row?.isHidden,

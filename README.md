@@ -167,7 +167,7 @@ Owner routes need `Authorization: Bearer` and act only on the caller's restauran
 | `GET /menu` | The full menu, hidden entries included |
 | `POST /menu/categories`, `PATCH`/`DELETE /menu/categories/:id` | Deleting a category deletes its items |
 | `PUT /menu/categories/order` `{ ids }` | The complete new order (400 `ORDER_MISMATCH` otherwise) |
-| `POST /menu/items`, `PATCH`/`DELETE /menu/items/:id` | `variants` (sizes) replace the item's list; one unnamed price, or named sizes. `isAvailable: false` = sold out |
+| `POST /menu/items`, `PATCH`/`DELETE /menu/items/:id` | `variants` (sizes) replace the item's list; one unnamed price, or named sizes, each with optional calories, portion and servings. `translations` hold extra languages. `isAvailable: false` = sold out |
 | `PUT /menu/categories/:id/items/order` `{ ids }` | Order within a category |
 | `PATCH /restaurants/mine` | Also `logoId`, `coverId` (images of that kind), `brandColor`, `openingHours` |
 
@@ -182,6 +182,10 @@ Public, no auth, `Access-Control-Allow-Origin: *`:
 | `POST /public/contact` | Website contact form; goes to `CONTACT_INBOX` (5 per hour per IP) |
 
 The public menu is cached in Redis under the restaurant's `menuVersion`, which every edit increments in the same transaction, so changes appear immediately. Images unused for a day are deleted by the worker.
+
+**Languages.** Arabic (`nameAr`, required) and English (`nameEn`, optional) are the menu's built-in languages. A restaurant can also offer extra languages, `PATCH /restaurants/mine { menuLanguages: ['fr', 'ru'] }`, chosen from `EXTRA_MENU_LANGUAGES` (fr, de, it, es, ru, zh, tr; a CHECK in SQL refuses others). Their text lives in `translations` on categories (`{ fr: { name } }`), dishes (`{ fr: { name, description } }`) and sizes (`{ fr: { name } }`); sending a blank string removes one. Clients pick text with `menuName()` / `menuDescription()` from `packages/contracts/src/menu-languages.ts`: the language's own text, then English, then Arabic. That file is zod-free, so the diner menu can import it. Orders copy only the Arabic and English names.
+
+**Calories and portions** are optional per size: `calories` (kcal, 0–10,000), a portion as `portionValue` + `portionUnit` (`GRAM`, `ML` or `PIECE`; both or neither, enforced in SQL too) and `serves` (1–50). Sizes are updated in place by position, so editing them keeps branch prices.
 
 Images are stored with `STORAGE_DRIVER=local` (in `var/media`, served at `/media`) or `s3` (Cloudflare R2 in production); see `.env.example`.
 

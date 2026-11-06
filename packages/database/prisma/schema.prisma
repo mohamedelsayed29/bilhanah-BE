@@ -223,6 +223,8 @@ model Restaurant {
   categories            Category[]
   menuItems             MenuItem[]
   payments              SubscriptionPayment[]
+  /// Extra languages the menu is offered in besides Arabic and English (contracts: EXTRA_MENU_LANGUAGES), in order.
+  menuLanguages                 String[]         @default([]) @map("menu_languages")
   reminders             ExpiryReminder[]
   tables                Table[]
   tableAreas            TableArea[]
@@ -423,18 +425,29 @@ model MenuItem {
   recommendedIn       RecommendationRuleItem[]
 
   @@index([categoryId, sortOrder])
+  /// Names in extra menu languages: { "fr": { "name": "…" } } (contracts: Translations).
+  translations Json     @default("{}")
   @@index([restaurantId])
   @@map("menu_items")
 }
 
 /// A size and its price. Single-price items have one variant without a name.
 model MenuItemVariant {
-  id            String  @id @default(uuid()) @db.Uuid
-  itemId        String  @map("item_id") @db.Uuid
-  nameAr        String? @map("name_ar") @db.VarChar(40)
-  nameEn        String? @map("name_en") @db.VarChar(40)
-  pricePiastres Int     @map("price_piastres")
-  sortOrder     Int     @map("sort_order")
+  id            String       @id @default(uuid()) @db.Uuid
+  itemId        String       @map("item_id") @db.Uuid
+  nameAr        String?      @map("name_ar") @db.VarChar(40)
+  nameEn        String?      @map("name_en") @db.VarChar(40)
+  /// Size names in extra menu languages: { "fr": { "name": "…" } }.
+  translations  Json         @default("{}")
+  pricePiastres Int          @map("price_piastres")
+  /// Energy in kcal; null when the restaurant does not show it.
+  calories      Int?
+  /// The portion: an amount and its unit (both or neither, CHECK in SQL).
+  portionValue  Int?         @map("portion_value")
+  portionUnit   PortionUnit? @map("portion_unit")
+  /// How many people this size serves.
+  serves        Int?         @db.SmallInt
+  sortOrder     Int          @map("sort_order")
 
   item          MenuItem                 @relation(fields: [itemId], references: [id], onDelete: Cascade)
   branchPrices  BranchVariantPrice[]
@@ -446,6 +459,8 @@ model MenuItemVariant {
 
 /// Reference data inserted by migration. Prices are in piastres.
 model Plan {
+  /// Name and description in extra menu languages: { "fr": { "name": "…", "description": "…" } }.
+  translations  Json     @default("{}")
   code                 PlanCode @id
   priceMonthlyPiastres Int      @map("price_monthly_piastres")
   createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -724,6 +739,15 @@ enum RecommendationType {
 
 enum RecommendationPlacement {
   PRODUCT_DETAILS
+/// How a menu size's portion is measured.
+enum PortionUnit {
+  GRAM
+  ML
+  PIECE
+
+  @@map("portion_unit")
+}
+
   CART
   CHECKOUT
 

@@ -161,6 +161,58 @@ if (!kitchens.some((account) => account.email === CASHIER_EMAIL)) {
   });
 }
 
+// French and Russian on top of Arabic and English, and calories and portions
+// per size. Filled in only where missing, so an owner's own edits are kept.
+const DEMO_LANGUAGES = ['fr', 'ru'];
+const CATEGORY_TRANSLATIONS = {
+  'الأطباق الرئيسية': { fr: { name: 'Plats principaux' }, ru: { name: 'Основные блюда' } },
+  'سلطات وخفيف': { fr: { name: 'Salades et en-cas' }, ru: { name: 'Салаты и закуски' } },
+  'مشروبات': { fr: { name: 'Boissons' }, ru: { name: 'Напитки' } },
+};
+/** Per dish: translations, and per size [kcal, portion amount, unit, serves]. */
+const DISH_DETAILS = {
+  'كشري أبو طارق': { translations: { fr: { name: 'Kochari maison', description: 'Riz, lentilles et pâtes, sauce tomate épicée et oignons croustillants' }, ru: { name: 'Фирменный кошари', description: 'Рис, чечевица и паста с острым томатным соусом и хрустящим луком' } }, sizes: [[520, 350, 'GRAM', 1], [740, 500, 'GRAM', 1], [980, 700, 'GRAM', 2]], sizeNames: [{ fr: { name: 'Petit' }, ru: { name: 'Маленький' } }, { fr: { name: 'Moyen' }, ru: { name: 'Средний' } }, { fr: { name: 'Grand' }, ru: { name: 'Большой' } }] },
+  'برجر البيت': { translations: { fr: { name: 'Burger maison', description: 'Bœuf grillé, cheddar et sauce maison' }, ru: { name: 'Домашний бургер', description: 'Говядина на гриле, чеддер и фирменный соус' } }, sizes: [[680, 250, 'GRAM', 1], [1050, 380, 'GRAM', 1]], sizeNames: [{ fr: { name: 'Simple' }, ru: { name: 'Обычный' } }, { fr: { name: 'Double' }, ru: { name: 'Двойной' } }] },
+  'باستا بيستو': { translations: { fr: { name: 'Pâtes au pesto', description: 'Basilic frais, parmesan et tomates' }, ru: { name: 'Паста песто', description: 'Свежий базилик, пармезан и помидоры' } }, sizes: [[610, 320, 'GRAM', 1]] },
+  'فتة لحمة': { translations: { fr: { name: 'Fatta à l’agneau', description: 'Pain grillé, riz à l’ail et au vinaigre, agneau' }, ru: { name: 'Фатта с бараниной', description: 'Поджаренный хлеб, рис с чесноком и уксусом, баранина' } }, sizes: [[1150, 600, 'GRAM', 2]] },
+  'سلطة الحديقة': { translations: { fr: { name: 'Salade du jardin', description: 'Légumes colorés, citron et huile d’olive' }, ru: { name: 'Садовый салат', description: 'Свежие овощи, лимон и оливковое масло' } }, sizes: [[180, 250, 'GRAM', 1]] },
+  'طحينة': { translations: { fr: { name: 'Tahina', description: 'Au citron et au cumin' }, ru: { name: 'Тахина', description: 'С лимоном и тмином' } }, sizes: [[120, 60, 'GRAM', null]] },
+  'ليمون نعناع': { translations: { fr: { name: 'Citron à la menthe' }, ru: { name: 'Лимон с мятой' } }, sizes: [[140, 330, 'ML', 1]] },
+  'كركديه': { translations: { fr: { name: 'Karkadé', description: 'Glacé ou chaud' }, ru: { name: 'Каркаде', description: 'Холодный или горячий' } }, sizes: [[90, 250, 'ML', 1], [320, 1000, 'ML', 4]], sizeNames: [{ fr: { name: 'Verre' }, ru: { name: 'Стакан' } }, { fr: { name: 'Carafe' }, ru: { name: 'Кувшин' } }] },
+};
+{
+  const owned = (await api('GET', '/restaurants/mine')).data;
+  if (!owned.menuLanguages?.length) await api('PATCH', '/restaurants/mine', { menuLanguages: DEMO_LANGUAGES });
+  const { categories } = (await api('GET', '/menu')).data;
+  let enriched = 0;
+  for (const category of categories) {
+    const names = CATEGORY_TRANSLATIONS[category.nameAr];
+    if (names && !Object.keys(category.translations ?? {}).length) await api('PATCH', `/menu/categories/${category.id}`, { translations: names });
+    for (const dish of category.items) {
+      const details = DISH_DETAILS[dish.nameAr];
+      if (!details || dish.variants.some((variant) => variant.calories !== null) || dish.variants.length !== details.sizes.length) continue;
+      await api('PATCH', `/menu/items/${dish.id}`, {
+        translations: Object.keys(dish.translations ?? {}).length ? dish.translations : details.translations,
+        variants: dish.variants.map((variant, index) => {
+          const [calories, portionValue, portionUnit, serves] = details.sizes[index];
+          return {
+            nameAr: variant.nameAr,
+            nameEn: variant.nameEn,
+            translations: Object.keys(variant.translations ?? {}).length ? variant.translations : (details.sizeNames?.[index] ?? {}),
+            pricePiastres: variant.pricePiastres,
+            calories,
+            portionValue,
+            portionUnit,
+            serves,
+          };
+        }),
+      });
+      enriched++;
+    }
+  }
+  if (enriched) console.log(`Added translations, calories and portions to ${enriched} demo dishes.`);
+}
+
 // A second branch, so multi-branch screens have something to show: its own
 // tables (copied from the main branch), ordering on, and one dish priced differently.
 const branchList = (await api('GET', '/branches')).data;

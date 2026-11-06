@@ -1,12 +1,14 @@
 import { effectiveItem, isEmptyItemOverride, itemOverride, NO_OVERRIDES, toOverrides } from './branch-menu.js';
 
+const noNutrition = { calories: null, portionValue: null, portionUnit: null, serves: null };
+
 const item = {
   id: 'item-1',
   isAvailable: true,
   isVisible: true,
   variants: [
-    { id: 'small', nameAr: 'صغير', nameEn: 'Small', pricePiastres: 3000 },
-    { id: 'large', nameAr: 'كبير', nameEn: 'Large', pricePiastres: 4500 },
+    { id: 'small', nameAr: 'صغير', nameEn: 'Small', translations: {}, pricePiastres: 3000, ...noNutrition },
+    { id: 'large', nameAr: 'كبير', nameEn: 'Large', translations: {}, pricePiastres: 4500, ...noNutrition },
   ],
 };
 

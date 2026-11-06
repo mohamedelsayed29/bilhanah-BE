@@ -20,6 +20,7 @@ import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { REDIS } from '../../infrastructure/redis/redis.module.js';
 import { MediaService } from '../media/media.service.js';
 import { type BranchOverrides, effectiveItem, NO_OVERRIDES, toOverrides } from '../branches/branch-menu.js';
+import { asTranslations } from './translations.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -74,6 +75,7 @@ export class MenusService {
       id: category.id,
       nameAr: category.nameAr,
       nameEn: category.nameEn,
+      translations: asTranslations(category.translations),
       isVisible: category.isVisible,
       stationId: category.stationId,
       items: category.items.map((item) => this.toOwnerItem(item)),
@@ -104,7 +106,7 @@ export class MenusService {
       const category = await tx.category.create({
         data: { ...input, restaurantId, sortOrder: (_max.sortOrder ?? -1) + 1 },
       });
-      return { id: category.id, nameAr: category.nameAr, nameEn: category.nameEn, isVisible: category.isVisible, stationId: category.stationId, items: [] };
+      return { id: category.id, nameAr: category.nameAr, nameEn: category.nameEn, translations: asTranslations(category.translations), isVisible: category.isVisible, stationId: category.stationId, items: [] };
     });
   }
 
@@ -237,6 +239,7 @@ export class MenusService {
         id: category.id,
         nameAr: category.nameAr,
         nameEn: category.nameEn,
+        translations: asTranslations(category.translations),
         items: category.items.flatMap((item) => {
           const shared = this.toPublicItem(item);
           const effective = effectiveItem({ ...shared, isVisible: item.isVisible }, overrides);
@@ -302,6 +305,7 @@ export class MenusService {
       descriptionAr: item.descriptionAr,
       descriptionEn: item.descriptionEn,
       image: item.image ? this.media.toImageSet(item.image) : null,
+      translations: asTranslations<'name' | 'description'>(item.translations),
       isAvailable: item.isAvailable,
       isVisible: item.isVisible,
       stationId: item.stationId,
@@ -310,7 +314,12 @@ export class MenusService {
         nameAr: variant.nameAr,
         nameEn: variant.nameEn,
         pricePiastres: variant.pricePiastres,
+        translations: asTranslations(variant.translations),
       })),
+        calories: variant.calories,
+        portionValue: variant.portionValue,
+        portionUnit: variant.portionUnit,
+        serves: variant.serves,
     };
   }
 }

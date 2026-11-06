@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  isExtraMenuLanguage,
   MAIN_BRANCH_SLUG,
   type PublicBranch,
   DEFAULT_MENU_THEME,
@@ -281,6 +282,8 @@ export class RestaurantsService {
   private async toOwnerRestaurant(restaurant: RestaurantRow, now = new Date()): Promise<OwnerRestaurant> {
     const [access, main, branchCount] = await Promise.all([
       this.subscriptions.accessFor(restaurant, now),
+      // A language dropped from a later release is simply no longer offered.
+      menuLanguages: restaurant.menuLanguages.filter(isExtraMenuLanguage),
       this.scopes.mainBranch(restaurant.id),
       this.prisma.branch.count({ where: { restaurantId: restaurant.id, isActive: true } }),
     ]);

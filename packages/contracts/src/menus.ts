@@ -27,9 +27,34 @@ const optionalText = (max: number) =>
 
 export const createCategorySchema = z.strictObject({
   nameAr: requiredText(80),
+/**
+ * Text in extra menu languages: { fr: { name, description? } }. Blank fields and
+ * languages are dropped, so sending '' removes a translation.
+ */
+function translationsSchema<const Fields extends Record<string, number>>(fields: Fields) {
+  const shape = Object.fromEntries(Object.entries(fields).map(([field, max]) => [field, z.string().trim().max(max).optional()])) as {
+    [Field in keyof Fields]: z.ZodOptional<z.ZodString>;
+  };
+  return z
+    .partialRecord(z.enum(EXTRA_MENU_LANGUAGES), z.strictObject(shape))
+    .transform((value) => {
+      const clean: Translations<Extract<keyof Fields, string>> = {};
+      for (const [language, texts] of Object.entries(value) as [keyof typeof clean, Record<string, string | undefined> | undefined][]) {
+        const kept = Object.fromEntries(Object.entries(texts ?? {}).filter(([, text]) => text));
+        if (Object.keys(kept).length) clean[language] = kept as Partial<Record<Extract<keyof Fields, string>, string>>;
+      }
+      return clean;
+    });
+}
+
+export const categoryTranslationsSchema = translationsSchema({ name: 80 });
+export const itemTranslationsSchema = translationsSchema({ name: 100, description: 500 });
+export const variantTranslationsSchema = translationsSchema({ name: 40 });
+
   nameEn: optionalText(80),
   isVisible: z.boolean().optional(),
   /** The kitchen station preparing its dishes; null for the default station. */
+  translations: categoryTranslationsSchema.optional(),
   stationId: z.uuid().nullable().optional(),
 });
 
@@ -37,11 +62,26 @@ export const updateCategorySchema = createCategorySchema.partial();
 
 export const pricePiastresSchema = z.number().int().min(0).max(MAX_PRICE_PIASTRES);
 
-const variantSchema = z.strictObject({
-  nameAr: optionalText(40),
-  nameEn: optionalText(40),
-  pricePiastres: pricePiastresSchema,
-});
+const optionalInt = (limits: { min: number; max: number }) => z.number().int().min(limits.min).max(limits.max).nullable().optional();
+
+const variantSchema = z
+  .strictObject({
+    nameAr: optionalText(40),
+    nameEn: optionalText(40),
+    translations: variantTranslationsSchema.optional(),
+    pricePiastres: pricePiastresSchema,
+    /** kcal; null hides it. */
+    calories: optionalInt(NUTRITION_LIMITS.calories),
+    /** A portion needs both its amount and its unit. */
+    portionValue: optionalInt(NUTRITION_LIMITS.portion),
+    portionUnit: z.enum(PORTION_UNITS).nullable().optional(),
+    serves: optionalInt(NUTRITION_LIMITS.serves),
+  })
+  .superRefine((variant, context) => {
+    if ((variant.portionValue == null) !== (variant.portionUnit == null)) {
+      context.addIssue({ code: 'custom', path: [variant.portionValue == null ? 'portionValue' : 'portionUnit'], message: 'Give the portion amount and its unit.' });
+    }
+  });
 
 /** One unnamed price, or several sizes that each have an Arabic name. */
 const variantsSchema = z
@@ -65,6 +105,7 @@ const itemFields = {
   descriptionEn: optionalText(500),
   imageId: z.uuid().nullable().optional(),
   isAvailable: z.boolean().optional(),
+  translations: itemTranslationsSchema.optional(),
   isVisible: z.boolean().optional(),
   /** Its own kitchen station; null follows the category's. */
   stationId: z.uuid().nullable().optional(),
@@ -91,7 +132,8 @@ export type MenuVariant = {
   nameAr: string | null;
   nameEn: string | null;
   pricePiastres: number;
-};
+} & VariantNutrition;
+  translations: Translations<'name'>;
 
 export type OwnerMenuItem = {
   id: string;
@@ -102,6 +144,8 @@ export type OwnerMenuItem = {
   descriptionEn: string | null;
   image: ImageSet | null;
   isAvailable: boolean;
+  /** Name and description in the restaurant's extra menu languages. */
+  translations: Translations<'name' | 'description'>;
   isVisible: boolean;
   variants: MenuVariant[];
   /** Its own kitchen station; null follows the category's. */
@@ -114,6 +158,7 @@ export type OwnerMenuCategory = {
   nameEn: string | null;
   isVisible: boolean;
   /** The kitchen station preparing its dishes; null for the default station. */
+  translations: Translations<'name'>;
   stationId: string | null;
   items: OwnerMenuItem[];
 };
@@ -129,3 +174,4 @@ export type PublicMenuCategory = {
   nameEn: string | null;
   items: PublicMenuItem[];
 };
+  translations: Translations<'name'>;
