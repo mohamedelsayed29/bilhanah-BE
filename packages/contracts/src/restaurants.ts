@@ -3,11 +3,13 @@ import { SERVICE_REQUEST_THROTTLE } from './service-requests.js';
 import type { PublicRecommendation } from './recommendations.js';
 import { type Language, languageSchema } from './common.js';
 import { MENU_THEMES, type MenuTheme } from './themes.js';
+import { EXTRA_MENU_LANGUAGES, type ExtraMenuLanguage } from './menu-languages.js';
 import type { ImageSet } from './media.js';
 import type { PublicMenuCategory } from './menus.js';
 import { type OpeningHours, openingHoursSchema } from './opening-hours.js';
 import type { RestaurantAccess } from './plans.js';
 import type { PublicBranch } from './branches.js';
+import type { PublicReviewsInfo } from './review-display.js';
 import { normalizeSubdomain, subdomainProblem, type SubdomainProblem } from './subdomains.js';
 
 /** Minutes the restaurant may give as an order's preparation estimate. */
@@ -110,6 +112,12 @@ export const updateRestaurantSchema = z.strictObject({
   openingHours: openingHoursSchema.nullable().optional(),
   /** How the public menu looks (see themes.ts). */
   menuTheme: z.enum(MENU_THEMES).optional(),
+  /** Languages diners may read the menu in besides Arabic and English, in the order offered. */
+  menuLanguages: z
+    .array(z.enum(EXTRA_MENU_LANGUAGES))
+    .max(EXTRA_MENU_LANGUAGES.length)
+    .refine((codes) => new Set(codes).size === codes.length, 'List each language once.')
+    .optional(),
   /**
    * Ordering (plans with ordering only): switched on, order types, and a temporary pause.
    * These and openingHours apply to the main branch; other branches are edited at /v1/branches.
@@ -155,6 +163,8 @@ export type RestaurantBranding = {
   brandColor: string | null;
   openingHours: OpeningHours | null;
   menuTheme: MenuTheme;
+  /** Extra menu languages offered to diners (Arabic and English are always available). */
+  menuLanguages: ExtraMenuLanguage[];
 };
 
 export type SubdomainAvailability =
@@ -208,6 +218,8 @@ export type PublicRestaurant =
       branch: PublicBranch;
       /** Every active branch, main first; more than one means diners may pick. */
       branches: PublicBranch[];
+      /** Diners' reviews (docs/REVIEWS.md); null when the plan has none. */
+      reviews: PublicReviewsInfo | null;
     } & RestaurantBranding)
   | { availability: 'TEMPORARILY_UNAVAILABLE'; subdomain: string; name: string; defaultLanguage: Language };
 

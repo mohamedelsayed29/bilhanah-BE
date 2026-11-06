@@ -8,6 +8,8 @@ export const RENDITION_WIDTHS: Record<MediaKind, number[]> = {
   COVER: [640, 1280, 1920],
   // One rendition, large enough to read a transfer receipt.
   PAYMENT_PROOF: [1600],
+  // Diners' review photos: a thumbnail and a full view.
+  REVIEW: [320, 640, 1280],
 };
 
 // About 8000 x 5000; larger inputs are rejected before decoding (decompression bombs).

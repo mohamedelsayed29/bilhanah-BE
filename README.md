@@ -167,7 +167,7 @@ Owner routes need `Authorization: Bearer` and act only on the caller's restauran
 | `GET /menu` | The full menu, hidden entries included |
 | `POST /menu/categories`, `PATCH`/`DELETE /menu/categories/:id` | Deleting a category deletes its items |
 | `PUT /menu/categories/order` `{ ids }` | The complete new order (400 `ORDER_MISMATCH` otherwise) |
-| `POST /menu/items`, `PATCH`/`DELETE /menu/items/:id` | `variants` (sizes) replace the item's list; one unnamed price, or named sizes. `isAvailable: false` = sold out |
+| `POST /menu/items`, `PATCH`/`DELETE /menu/items/:id` | `variants` (sizes) replace the item's list; one unnamed price, or named sizes, each with optional calories, portion and servings. `translations` hold extra languages. `isAvailable: false` = sold out |
 | `PUT /menu/categories/:id/items/order` `{ ids }` | Order within a category |
 | `PATCH /restaurants/mine` | Also `logoId`, `coverId` (images of that kind), `brandColor`, `openingHours` |
 
@@ -182,6 +182,10 @@ Public, no auth, `Access-Control-Allow-Origin: *`:
 | `POST /public/contact` | Website contact form; goes to `CONTACT_INBOX` (5 per hour per IP) |
 
 The public menu is cached in Redis under the restaurant's `menuVersion`, which every edit increments in the same transaction, so changes appear immediately. Images unused for a day are deleted by the worker.
+
+**Languages.** Arabic (`nameAr`, required) and English (`nameEn`, optional) are the menu's built-in languages. A restaurant can also offer extra languages, `PATCH /restaurants/mine { menuLanguages: ['fr', 'ru'] }`, chosen from `EXTRA_MENU_LANGUAGES` (fr, de, it, es, ru, zh, tr; a CHECK in SQL refuses others). Their text lives in `translations` on categories (`{ fr: { name } }`), dishes (`{ fr: { name, description } }`) and sizes (`{ fr: { name } }`); sending a blank string removes one. Clients pick text with `menuName()` / `menuDescription()` from `packages/contracts/src/menu-languages.ts`: the language's own text, then English, then Arabic. That file is zod-free, so the diner menu can import it. Orders copy only the Arabic and English names.
+
+**Calories and portions** are optional per size: `calories` (kcal, 0–10,000), a portion as `portionValue` + `portionUnit` (`GRAM`, `ML` or `PIECE`; both or neither, enforced in SQL too) and `serves` (1–50). Sizes are updated in place by position, so editing them keeps branch prices.
 
 Images are stored with `STORAGE_DRIVER=local` (in `var/media`, served at `/media`) or `s3` (Cloudflare R2 in production); see `.env.example`.
 
@@ -224,7 +228,7 @@ Plans set the allowance of active branches (`PLAN_FEATURES[plan].branches`: Menu
 
 **Diners.** `GET /public/restaurants/:subdomain[/menu]?branch=slug` returns the chosen branch (main when omitted) in `branch`, every active branch in `branches`, and the branch's contact details, hours, ordering and prices in the usual fields; unknown or archived slugs answer 404 `BRANCH_NOT_FOUND`. A branch's own link is `{publicUrl}/?b={slug}`. Orders take `branch` (slug); a `tableCode` decides the branch by itself. The table lookup returns `{ label, branch }`, and tracked orders include `branch`.
 
-**Staff.** `POST/PATCH /kitchen-accounts` take `role` (`KITCHEN` or `MANAGER`) and `branchId` (null: every branch). Changing either signs the account out. Managers run their branch: board, floor, bills, tables, branch menu overrides, branch settings and insights; `GET /kitchen/context` tells a staff screen its role, branch and branches. Every owner and staff query goes through `BranchScopeService` (`src/modules/branches/branch-scope.service.ts`): other restaurants' branch ids answer 404, another branch of the caller's own restaurant 403 `BRANCH_FORBIDDEN`.
+**Staff.** `POST/PATCH /kitchen-accounts` take `role` (`KITCHEN` or `MANAGER`) and `branchId` (null: every branch). Changing either signs the account out. Managers run their branch: board, floor, bills, tables, branch menu overrides, branch settings and insights; `GET /kitchen/context` tells a staff screen its role, branch and branches, and the plan's effective `features` (all off without access), so staff screens offer inventory without probing its routes. Every owner and staff query goes through `BranchScopeService` (`src/modules/branches/branch-scope.service.ts`): other restaurants' branch ids answer 404, another branch of the caller's own restaurant 403 `BRANCH_FORBIDDEN`.
 
 **Compatibility.** `PATCH /restaurants/mine` still accepts `openingHours`, `orderingEnabled`, `acceptsDineIn`, `acceptsPickup` and `ordersPaused`, applied to the main branch; `GET /restaurants/mine` reports the main branch's (plus `mainBranchId` and `branchCount`). While a restaurant has one branch, its phone, city, address and WhatsApp stay in step with the branch.
 
@@ -245,6 +249,14 @@ On the Full Experience plan, the tracking page rings and vibrates when the order
 When an order becomes READY, REJECTED or CANCELLED, the API queues one job per subscribed browser (`push` queue, job id `{subscription}_{status}` so a status is never sent twice). The worker writes the notification in the diner's language, links the tracking page, and sends it with a 1-hour TTL and the order as the topic (a newer update replaces an undelivered older one). Push services answering 403/404/410 mean the subscription is dead and it is deleted; 400/413 are dropped; anything else is retried with backoff. Owners see a bell on orders whose diner turned notifications on (`OwnerOrder.notifiesDiner`, live over `order.updated`). Subscriptions are deleted an hour after their order is finished, and after two days at most.
 
 Push needs `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` (`npm run vapid:generate`; `npm run dev` adds a pair to `.env`). Without them the tracking page still rings while open.
+
+## Inventory and costs (Menu & Orders and Full Experience plans)
+
+Ingredients (raw, or prepared from their own recipe) with purchase units, suppliers, stock per branch at a weighted average cost, an immutable stock ledger, purchases, waste, stock counts (with optional approval) and transfers between branches, recipes per dish size, and food cost, valuation, reorder, low-stock and menu-engineering reports, all under `/v1/inventory` (`src/modules/inventory/`, contracts in `packages/contracts/src/inventory.ts`). Orders deduct their recipes when they reach the owner's chosen status (accepted, ready or completed) and give them back when cancelled; the owner also chooses what happens when stock is short (allow, warn, or refuse the order with 409 `INSUFFICIENT_STOCK`), auto sold-out and restore, the valuation basis and the waste reasons. Permissions `inventory.view`, `.waste`, `.operate`, `.manage`, `.costs` and `.approve` are grantable to every staff role; without `inventory.costs` cost fields are null. Staff screens read whether the plan includes inventory from `GET /v1/kitchen/context` (`features`); `GET /v1/inventory/dishes` lists every dish size with its recipe lines and no costs (for viewers and waste), `GET /v1/inventory/transfer-destinations` the other active branches a branch-tied manager may send to (id, name, slug only); unit names come in Arabic and English (`unitNameAr`, `unitNameEn`), and ingredients say whether their kind and unit are `locked`. The full rules are in **[docs/INVENTORY.md](docs/INVENTORY.md)**.
+
+## Feedback and reviews (Menu & Orders and Full Experience plans)
+
+Diners rate their visit, a few sub-ratings and each dish from the order's tracking link (one verified review per order, editable for a while from the same browser, with up to 3 photos that stay private until published), or leave unverified feedback from a table QR or the menu when the owner allows it. Restaurants read an inbox under `/v1/reviews`, reply publicly, publish or hide (with an audited reason), follow unhappy diners up (internal notes, an assignee, history), and see stats, a dish ranking and a CSV export (`src/modules/reviews/`, contracts in `packages/contracts/src/reviews.ts` and the zod-free `review-display.ts`). The owner's settings decide what diners are asked, what is published (automatically above a threshold, after moderation, or never), whether the public reviews page and dish badges show (`rating` on public menu items), when the dashboard and email alert on low ratings, and when happy diners are invited to the branch's Google review link (`googleReviewUrl` on branches). Permissions `reviews.view`, `.respond` (also shows contact phones), `.moderate` and `.settings` are grantable to every staff role; review events reach only sockets whose account holds `reviews.view`. The full rules are in **[docs/REVIEWS.md](docs/REVIEWS.md)**.
 
 ## Subscriptions and billing (manual transfer)
 

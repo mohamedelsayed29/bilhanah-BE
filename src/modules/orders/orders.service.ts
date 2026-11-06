@@ -47,6 +47,7 @@ import { MenusService } from '../menus/menus.service.js';
 import { RecommendationsService } from '../recommendations/recommendations.service.js';
 import { KitchenStationsService } from '../kitchen-display/kitchen-stations.service.js';
 import { CashService } from '../cash/cash.service.js';
+import { InventoryOrdersService } from '../inventory/inventory-orders.service.js';
 import { forwardSteps, itemCascade, itemTimestamps, orderTargetFromItems } from './order-items.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { hasAccess } from '../subscriptions/access.js';
@@ -111,6 +112,7 @@ export class OrdersService {
     private readonly recommendations: RecommendationsService,
     private readonly stations: KitchenStationsService,
     private readonly cash: CashService,
+    private readonly inventory: InventoryOrdersService,
   ) {}
 
   // --- Diners --------------------------------------------------------------
@@ -163,6 +165,11 @@ export class OrdersService {
     }
 
     const lines = await this.priceLines(restaurant.id, branch.id, input.items);
+    // Inventory's stock policy: BLOCK_ORDERS refuses dishes the branch cannot cover; WARN flags them.
+    const stock = await this.inventory.checkStock(restaurant, branch.id, lines);
+    if (stock.short.length && stock.policy === 'BLOCK_ORDERS') {
+      throw new ConflictException({ code: ORDER_ERROR_CODES.INSUFFICIENT_STOCK, message: 'Some dishes are not available right now.', details: { menuItemIds: stock.short } });
+    }
     // An order placed at a table belongs to the table's open session (shared or not), for its bill and metrics.
     const sessionId = shared?.sessionId ?? (table
       ? (await this.prisma.tableSession.findFirst({ where: { tableId: table.id, status: { not: 'CLOSED' } }, select: { id: true } }))?.id ?? null
@@ -194,6 +201,7 @@ export class OrdersService {
             idempotencyKey,
             placedAt: now,
             tableSessionId: sessionId,
+            lowStockItemIds: stock.policy === 'WARN' ? stock.short : [],
             items: { create: lines.map((line, sortOrder) => ({ ...line, sortOrder, guestId: shared?.guests[sortOrder]?.id ?? null, guestName: shared?.guests[sortOrder]?.name ?? null })) },
             statusEvents: { create: { status: 'PLACED', createdAt: now } },
           },
@@ -368,6 +376,9 @@ export class OrdersService {
         });
         // The dishes follow the order (accepting accepts them, ready makes them ready...).
         await this.cascadeItems(tx, orderId, input.status, { id: userId, name: actor?.fullName ?? null }, now);
+        // Stock follows too: reaching the deduction point deducts the recipes, cancelling puts back what was deducted.
+        if (input.status === 'CANCELLED') await this.inventory.orderCancelled(tx, orderId);
+        else await this.inventory.orderReached(tx, orderId, input.status);
       }
       return result;
     });
@@ -455,6 +466,10 @@ export class OrdersService {
         await tx.orderStatusEvent.create({ data: { orderId, status: step, actorId: userId, actorName: actor?.fullName ?? null, createdAt: now } });
         previous = step;
       }
+      // The order moved along with its dishes: deducted if it reached the deduction point (cancelled dishes skipped).
+      if (path.length) await this.inventory.orderReached(tx, orderId, previous);
+      // A dish cancelled on the kitchen display gives back what it took.
+      if (input.status === 'CANCELLED') await this.inventory.itemsCancelled(tx, orderId, changes.map((change) => change.id));
       // Serving the last dishes completes the order: anything still waiting is served with it.
       if (previous === 'COMPLETED') await this.cascadeItems(tx, orderId, 'COMPLETED', { id: userId, name: actor?.fullName ?? null }, now);
       return path;
@@ -848,6 +863,7 @@ export class OrdersService {
           variantNameAr: menuItem.variants.length > 1 ? variant.nameAr : null,
           variantNameEn: menuItem.variants.length > 1 ? variant.nameEn : null,
           unitPricePiastres: variant.pricePiastres,
+          variantId: variant.id,
           quantity: line.quantity,
           note: line.note ?? null,
           stationId: route(menuItem)?.id ?? null,
@@ -930,6 +946,7 @@ export class OrdersService {
       notifiesDiner: order._count.pushSubscriptions > 0,
       priority: order.priority,
       paymentMethod: order.paymentMethod,
+      lowStockItemIds: order.lowStockItemIds,
       ...this.core(order),
       history: order.statusEvents.map((event) => ({ status: event.status, at: event.createdAt.toISOString(), reason: event.reason, actorName: event.actorName })),
       transfers: order.tableTransfers.map((entry) => ({ fromTableLabel: entry.fromTableLabel, toTableLabel: entry.toTableLabel, at: entry.createdAt.toISOString(), actorName: entry.actorName, reason: entry.reason })),

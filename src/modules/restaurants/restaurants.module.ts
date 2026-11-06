@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ReviewsModule } from '../reviews/reviews.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { MediaModule } from '../media/media.module.js';
 import { MenusModule } from '../menus/menus.module.js';
@@ -10,7 +11,7 @@ import { RestaurantsController } from './restaurants.controller.js';
 import { RestaurantsService } from './restaurants.service.js';
 
 @Module({
-  imports: [AuthModule, SubscriptionsModule, MediaModule, MenusModule, RealtimeModule, RecommendationsModule],
+  imports: [AuthModule, SubscriptionsModule, MediaModule, MenusModule, RealtimeModule, RecommendationsModule, ReviewsModule],
   controllers: [RestaurantsController, PublicRestaurantsController],
   providers: [RestaurantsService],
 })

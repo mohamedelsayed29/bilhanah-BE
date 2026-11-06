@@ -290,6 +290,8 @@ export class BranchesService {
         const next = {
           isAvailable: input.available !== undefined ? input.available : (current?.isAvailable ?? null),
           isHidden: input.hidden ?? current?.isHidden ?? false,
+          // A manual availability change replaces inventory's mark, so restocking never undoes it.
+          soldOutByInventory: input.available !== undefined ? false : (current?.soldOutByInventory ?? false),
         };
         if (isEmptyItemOverride(next)) await tx.branchMenuItem.deleteMany({ where: { branchId: branch.id, itemId } });
         else await tx.branchMenuItem.upsert({ where: { branchId_itemId: { branchId: branch.id, itemId } }, create: { branchId: branch.id, itemId, ...next }, update: next });
@@ -337,10 +339,14 @@ export class BranchesService {
         tx.branchMenuItem.findMany({ where: { branchId: source.id } }),
         tx.branchVariantPrice.findMany({ where: { branchId: source.id } }),
       ]);
-      await tx.branchMenuItem.createMany({ data: items.map(({ updatedAt: _u, ...row }) => ({ ...row, branchId: target.id })) });
+      // Inventory's sold-out marks belong to the source's stock, not the target's: they are not copied.
+      const copiedItems = items
+        .map(({ updatedAt: _u, ...row }) => (row.soldOutByInventory ? { ...row, isAvailable: null, soldOutByInventory: false } : row))
+        .filter((row) => !isEmptyItemOverride(row));
+      await tx.branchMenuItem.createMany({ data: copiedItems.map((row) => ({ ...row, branchId: target.id })) });
       await tx.branchVariantPrice.createMany({ data: prices.map(({ updatedAt: _u, ...row }) => ({ ...row, branchId: target.id })) });
       await this.bumpMenu(tx, scope.restaurant.id);
-      return items.length + prices.length;
+      return copiedItems.length + prices.length;
     });
     return { copied };
   }
@@ -368,6 +374,7 @@ export class BranchesService {
       city: branch.city,
       address: branch.address,
       mapUrl: branch.mapUrl,
+      googleReviewUrl: branch.googleReviewUrl,
       openingHours: hoursOf(branch),
       ordering: orderingSettings(branch, access.features.ordering),
       publicUrl: branch.isMain ? base : `${base}/?b=${branch.slug}`,

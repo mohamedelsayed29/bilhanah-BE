@@ -111,6 +111,38 @@ describe('kitchen accounts', () => {
     expect((await http().get('/v1/orders?view=active').set(auth(token)).expect(200)).body.items).toEqual([]);
   });
 
+  it('tells staff screens what the plan includes, the same way the plan-gated routes decide', async () => {
+    const owner = await restaurant();
+    const restaurantId = (await t.prisma.restaurant.findFirstOrThrow({ where: { subdomain: 'koshary' } })).id;
+    const accounts = [
+      { ...KITCHEN, role: 'KITCHEN' },
+      { fullName: 'Floor manager', email: 'manager@koshary.test', password: 'manager-password', role: 'MANAGER' },
+      { fullName: 'Front cashier', email: 'cashier@koshary.test', password: 'cashier-password', role: 'CASHIER' },
+    ];
+    const tokens: string[] = [];
+    for (const account of accounts) {
+      await http().post('/v1/kitchen-accounts').set(auth(owner.token)).send(account).expect(201);
+      tokens.push((await login(account.email, account.password).expect(200)).body.accessToken as string);
+    }
+    const features = async (token: string) => (await http().get('/v1/kitchen/context').set(auth(token)).expect(200)).body.features;
+
+    // A new restaurant's trial: the Full Experience, inventory included.
+    for (const token of tokens) expect(await features(token)).toEqual({ menu: true, ordering: true, readyAlerts: true, inventory: true, reviews: true, branches: 10 });
+    await http().get('/v1/inventory/settings').set(auth(tokens[1]!)).expect(200);
+
+    // The Menu plan has no inventory: the context says so and the routes refuse.
+    await t.prisma.entitlement.updateMany({ where: { restaurantId }, data: { planCode: 'MENU' } });
+    for (const token of tokens) expect(await features(token)).toEqual({ menu: true, ordering: false, readyAlerts: false, inventory: false, reviews: false, branches: 1 });
+    expect((await http().get('/v1/inventory/settings').set(auth(tokens[1]!)).expect(409)).body.error.code).toBe('INVENTORY_UNAVAILABLE');
+
+    // Menu & Orders includes it again; without access (the period ended) nothing is included.
+    await t.prisma.entitlement.updateMany({ where: { restaurantId }, data: { planCode: 'ORDERS' } });
+    expect(await features(tokens[0]!)).toMatchObject({ ordering: true, inventory: true, reviews: true, readyAlerts: false, branches: 3 });
+    await t.prisma.entitlement.updateMany({ where: { restaurantId }, data: { startsAt: new Date(Date.now() - 2 * 86_400_000), endsAt: new Date(Date.now() - 60_000) } });
+    expect(await features(tokens[0]!)).toEqual({ menu: false, ordering: false, readyAlerts: false, inventory: false, reviews: false, branches: 0 });
+    await http().get('/v1/inventory/settings').set(auth(tokens[1]!)).expect(409);
+  });
+
   it('signs the screens out when the owner turns the account off, changes its password or deletes it', async () => {
     const owner = await restaurant();
     const id = (await http().post('/v1/kitchen-accounts').set(auth(owner.token)).send(KITCHEN).expect(201)).body.id as string;

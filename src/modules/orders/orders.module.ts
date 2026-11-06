@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { CashModule } from '../cash/cash.module.js';
+import { InventoryModule } from '../inventory/inventory.module.js';
 import { KitchenDisplayModule } from '../kitchen-display/kitchen-display.module.js';
 import { MediaModule } from '../media/media.module.js';
 import { MenusModule } from '../menus/menus.module.js';
@@ -13,7 +14,7 @@ import { TableGroupsService } from './table-groups.service.js';
 import { OrdersService } from './orders.service.js';
 
 @Module({
-  imports: [AuthModule, MediaModule, MenusModule, SubscriptionsModule, RealtimeModule, RecommendationsModule, KitchenDisplayModule, CashModule],
+  imports: [AuthModule, MediaModule, MenusModule, SubscriptionsModule, RealtimeModule, RecommendationsModule, KitchenDisplayModule, CashModule, InventoryModule],
   controllers: [OrdersController, PublicOrdersController, TableGroupsController],
   providers: [OrdersService, OrderAlertsService, TableGroupsService],
   exports: [OrdersService],

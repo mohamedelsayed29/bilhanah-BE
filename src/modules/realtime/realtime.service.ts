@@ -18,6 +18,10 @@ import {
   type TableUpdatedEvent,
   REALTIME_PATH,
   type TrackedOrderEvent,
+  effectivePermissions,
+  type OwnerReviewListItem,
+  REVIEW_EVENTS,
+  type ReviewRealtimeEvent,
 } from '@bilhanah/contracts';
 import { createAdapter } from '@socket.io/redis-adapter';
 import type { Redis } from 'ioredis';
@@ -32,6 +36,9 @@ const restaurantRoom = (restaurantId: string) => `restaurant:${restaurantId}`;
 const branchRoom = (branchId: string) => `branch:${branchId}`;
 const orderRoom = (orderId: string) => `order:${orderId}`;
 const tableSessionRoom = (sessionId: string) => `table-session:${sessionId}`;
+/** Reviews go only to sockets whose account holds reviews.view, so they have rooms of their own. */
+const reviewsRestaurantRoom = (restaurantId: string) => `reviews:restaurant:${restaurantId}`;
+const reviewsBranchRoom = (branchId: string) => `reviews:branch:${branchId}`;
 
 /**
  * Live order updates over Socket.IO (WebSocket only, so no sticky sessions
@@ -40,7 +47,8 @@ const tableSessionRoom = (sessionId: string) => `table-session:${sessionId}`;
  * - /owner: auth { token: accessToken }. Owners and all-branch staff join the
  *   restaurant room (every branch); staff tied to a branch join that branch's room;
  *   disconnected when the token expires, so the client reconnects with a
- *   fresh one and revoked sessions stop receiving events.
+ *   fresh one and revoked sessions stop receiving events. Accounts holding
+ *   reviews.view also join the matching reviews room (review events).
  * - /track: auth { token: trackingToken }. Joins that one order's room.
  * - /table: auth { token: tableSessionToken }. Joins that table session's room, for the
  *   status of the guests' service requests.
@@ -130,6 +138,12 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
     this.owners?.to([restaurantRoom(restaurantId), branchRoom(event.branchId)]).emit(REALTIME_EVENTS.TABLE_UPDATED, event satisfies TableUpdatedEvent);
   }
 
+  /** A new or changed review: to the dashboards that may read reviews (reviews.view), restaurant-wide and at its branch. */
+  emitReview(kind: 'created' | 'updated', restaurantId: string, review: OwnerReviewListItem): void {
+    const event = kind === 'created' ? REVIEW_EVENTS.CREATED : REVIEW_EVENTS.UPDATED;
+    this.owners?.to([reviewsRestaurantRoom(restaurantId), reviewsBranchRoom(review.branchId)]).emit(event, { review } satisfies ReviewRealtimeEvent);
+  }
+
   /** Tells the other devices that a branch's ordering settings changed (e.g. orders paused). */
   emitRestaurantUpdated(restaurantId: string, branchId: string, ordering: OrderingSettings): void {
     this.owners
@@ -152,7 +166,7 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
         userId: true,
         revokedAt: true,
         expiresAt: true,
-        user: { select: { role: true, status: true, staffRestaurantId: true, staffBranchId: true, restaurant: { select: { id: true } } } },
+        user: { select: { role: true, status: true, staffRestaurantId: true, staffBranchId: true, permissionGrants: true, restaurant: { select: { id: true } } } },
       },
     });
     // Staff follow their restaurant (and only their branch when tied to one); owners their own restaurant.
@@ -162,7 +176,12 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
       throw new Error('UNAUTHENTICATED');
     }
     const branchId = staff ? session.user.staffBranchId : null;
-    await socket.join(branchId ? branchRoom(branchId) : restaurantRoom(restaurantId));
+    const rooms = [branchId ? branchRoom(branchId) : restaurantRoom(restaurantId)];
+    // Permissions as of connecting; the socket reconnects (and is checked again) when its token expires.
+    if (effectivePermissions(session.user.role, session.user.permissionGrants).includes('reviews.view')) {
+      rooms.push(branchId ? reviewsBranchRoom(branchId) : reviewsRestaurantRoom(restaurantId));
+    }
+    await socket.join(rooms);
     // End the connection when the access token expires; the client reconnects with a fresh one.
     const timer = setTimeout(() => socket.disconnect(true), Math.max(0, claims.exp * 1000 - Date.now()));
     socket.on('disconnect', () => clearTimeout(timer));

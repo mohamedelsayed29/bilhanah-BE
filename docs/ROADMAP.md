@@ -123,7 +123,7 @@ ORDERS plan: discount codes and upselling. Full Experience plan: delivery, onlin
 
 - **Light diner profiles.** The phone number is remembered on the device, with "reorder my last order" and an order history. Optional sign-in by OTP.
 - **Loyalty.** Stamp cards ("6th coffee free") or points per EGP spent, set by the owner.
-- **Reviews and feedback.** After an order is completed: rate it 1–5 stars, add a comment, and attach a photo. Low ratings go privately to the owner; happy diners are nudged toward Google Maps.
+- **Reviews and feedback.** After an order is completed: rate it 1–5 stars, add a comment, and attach a photo. Low ratings go privately to the owner; happy diners are nudged toward Google Maps. *Built (Menu & Orders and Full Experience plans): see [REVIEWS.md](REVIEWS.md).*
 - **Reservations.** Pick a date, time and party size; the owner confirms. Includes WhatsApp reminders.
 - **Marketing list.** Diners who opt in can be messaged about offers, by WhatsApp or email, with consent kept under PDPL.
 

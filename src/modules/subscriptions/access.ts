@@ -1,7 +1,7 @@
 import { PLAN_FEATURES, type PlanFeatures, type RestaurantAccess } from '@bilhanah/contracts';
 import type { Entitlement, RestaurantStatus } from '@bilhanah/database';
 
-const NO_FEATURES: PlanFeatures = { menu: false, ordering: false, readyAlerts: false, branches: 0 };
+const NO_FEATURES: PlanFeatures = { menu: false, ordering: false, readyAlerts: false, inventory: false, reviews: false, branches: 0 };
 
 type EntitlementPeriod = Pick<Entitlement, 'kind' | 'planCode' | 'startsAt' | 'endsAt'>;
 
@@ -42,4 +42,9 @@ export function resolveAccess(
 
 export function hasAccess(access: RestaurantAccess): boolean {
   return access.status === 'TRIAL' || access.status === 'PAID';
+}
+
+/** What the restaurant may use right now: its plan's features while it has access, none otherwise. */
+export function effectiveFeatures(access: RestaurantAccess): PlanFeatures {
+  return hasAccess(access) ? access.features : NO_FEATURES;
 }

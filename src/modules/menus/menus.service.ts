@@ -20,6 +20,7 @@ import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { REDIS } from '../../infrastructure/redis/redis.module.js';
 import { MediaService } from '../media/media.service.js';
 import { type BranchOverrides, effectiveItem, NO_OVERRIDES, toOverrides } from '../branches/branch-menu.js';
+import { asTranslations } from './translations.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -74,6 +75,7 @@ export class MenusService {
       id: category.id,
       nameAr: category.nameAr,
       nameEn: category.nameEn,
+      translations: asTranslations(category.translations),
       isVisible: category.isVisible,
       stationId: category.stationId,
       items: category.items.map((item) => this.toOwnerItem(item)),
@@ -83,7 +85,7 @@ export class MenusService {
   /** A branch's overrides of this restaurant's menu. */
   async branchOverrides(branchId: string): Promise<BranchOverrides> {
     const [items, prices] = await Promise.all([
-      this.prisma.branchMenuItem.findMany({ where: { branchId }, select: { itemId: true, isAvailable: true, isHidden: true } }),
+      this.prisma.branchMenuItem.findMany({ where: { branchId }, select: { itemId: true, isAvailable: true, isHidden: true, soldOutByInventory: true } }),
       this.prisma.branchVariantPrice.findMany({ where: { branchId }, select: { variantId: true, pricePiastres: true } }),
     ]);
     return toOverrides(items, prices);
@@ -104,7 +106,7 @@ export class MenusService {
       const category = await tx.category.create({
         data: { ...input, restaurantId, sortOrder: (_max.sortOrder ?? -1) + 1 },
       });
-      return { id: category.id, nameAr: category.nameAr, nameEn: category.nameEn, isVisible: category.isVisible, stationId: category.stationId, items: [] };
+      return { id: category.id, nameAr: category.nameAr, nameEn: category.nameEn, translations: asTranslations(category.translations), isVisible: category.isVisible, stationId: category.stationId, items: [] };
     });
   }
 
@@ -237,6 +239,7 @@ export class MenusService {
         id: category.id,
         nameAr: category.nameAr,
         nameEn: category.nameEn,
+        translations: asTranslations(category.translations),
         items: category.items.flatMap((item) => {
           const shared = this.toPublicItem(item);
           const effective = effectiveItem({ ...shared, isVisible: item.isVisible }, overrides);
@@ -290,7 +293,8 @@ export class MenusService {
 
   private toPublicItem(item: ItemRow): PublicMenuItem {
     const { categoryId: _category, isVisible: _visible, stationId: _station, ...publicItem } = this.toOwnerItem(item);
-    return publicItem;
+    // Ratings change more often than the menu: they are attached after the cached part (ReviewsPublicService.withRatings).
+    return { ...publicItem, rating: null };
   }
 
   private toOwnerItem(item: ItemRow): OwnerMenuItem {
@@ -301,6 +305,7 @@ export class MenusService {
       nameEn: item.nameEn,
       descriptionAr: item.descriptionAr,
       descriptionEn: item.descriptionEn,
+      translations: asTranslations<'name' | 'description'>(item.translations),
       image: item.image ? this.media.toImageSet(item.image) : null,
       isAvailable: item.isAvailable,
       isVisible: item.isVisible,
@@ -309,7 +314,12 @@ export class MenusService {
         id: variant.id,
         nameAr: variant.nameAr,
         nameEn: variant.nameEn,
+        translations: asTranslations(variant.translations),
         pricePiastres: variant.pricePiastres,
+        calories: variant.calories,
+        portionValue: variant.portionValue,
+        portionUnit: variant.portionUnit,
+        serves: variant.serves,
       })),
     };
   }

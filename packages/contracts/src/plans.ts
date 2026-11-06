@@ -5,14 +5,18 @@ export type PlanFeatures = {
   menu: boolean;
   ordering: boolean;
   readyAlerts: boolean;
+  /** Inventory, recipes and cost management (docs/INVENTORY.md). Which plans include it is decided here only. */
+  inventory: boolean;
+  /** Feedback and reviews (docs/REVIEWS.md). Which plans include it is decided here only. */
+  reviews: boolean;
   /** How many active branches the plan allows. */
   branches: number;
 };
 
 export const PLAN_FEATURES: Record<PlanCode, PlanFeatures> = {
-  MENU: { menu: true, ordering: false, readyAlerts: false, branches: 1 },
-  ORDERS: { menu: true, ordering: true, readyAlerts: false, branches: 3 },
-  ADVANCED: { menu: true, ordering: true, readyAlerts: true, branches: 10 },
+  MENU: { menu: true, ordering: false, readyAlerts: false, inventory: false, reviews: false, branches: 1 },
+  ORDERS: { menu: true, ordering: true, readyAlerts: false, inventory: true, reviews: true, branches: 3 },
+  ADVANCED: { menu: true, ordering: true, readyAlerts: true, inventory: true, reviews: true, branches: 10 },
 };
 
 export type AccessStatus = 'TRIAL' | 'PAID' | 'INACTIVE' | 'SUSPENDED';

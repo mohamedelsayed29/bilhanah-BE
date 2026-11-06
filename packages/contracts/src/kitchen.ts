@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { emailSchema } from './common.js';
 import { passwordSchema } from './auth.js';
+import type { PlanFeatures } from './plans.js';
 import type { OrderingSettings } from './restaurants.js';
 import { PERMISSIONS, type Permission, STAFF_ROLES, type StaffRole } from './permissions.js';
 
@@ -84,6 +85,11 @@ export type KitchenContext = {
   ordering: OrderingSettings;
   /** The restaurant's usual preparation time, offered when accepting an order; null without one. */
   orderPrepMinutes: number | null;
+  /**
+   * What the restaurant's plan includes right now (all off without access: expired or suspended),
+   * so staff screens can offer inventory and the rest without probing their routes.
+   */
+  features: PlanFeatures;
 };
 
 /** GET /v1/kitchen-accounts/options: what the caller may do on the staff page. */

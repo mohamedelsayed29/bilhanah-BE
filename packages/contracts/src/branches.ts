@@ -62,6 +62,8 @@ const branchDetails = {
   city: z.string().trim().min(2).max(60),
   address: z.string().trim().min(3).max(200),
   mapUrl: optionalUrlSchema,
+  /** The branch's "write a review" link on Google, offered to happy diners (docs/REVIEWS.md). */
+  googleReviewUrl: optionalUrlSchema,
   openingHours: openingHoursSchema.nullable().optional(),
 };
 
@@ -85,6 +87,7 @@ export const updateBranchSchema = z.strictObject({
   city: branchDetails.city.optional(),
   address: branchDetails.address.optional(),
   mapUrl: optionalUrlSchema,
+  googleReviewUrl: optionalUrlSchema,
   openingHours: branchDetails.openingHours,
   /** False archives the branch: hidden from diners, no new orders, history kept. */
   isActive: z.boolean().optional(),
@@ -113,6 +116,8 @@ export type OwnerBranch = {
   city: string;
   address: string;
   mapUrl: string | null;
+  /** Google "write a review" link for happy diners. */
+  googleReviewUrl: string | null;
   openingHours: OpeningHours | null;
   ordering: OrderingSettings;
   /** The branch's own menu link; table QR codes point at tables directly. */
@@ -143,6 +148,7 @@ export type PublicBranch = {
   city: string;
   address: string;
   mapUrl: string | null;
+  googleReviewUrl: string | null;
   openingHours: OpeningHours | null;
   /** Taking orders right now, opening hours aside (they are checked by the client and the server). */
   acceptingOrders: boolean;
@@ -156,6 +162,8 @@ export type BranchItemOverride = {
   available: boolean | null;
   /** The branch does not offer this dish. */
   hidden: boolean;
+  /** The sold-out mark was set by inventory (an ingredient ran out); restocking lifts it. Any manual change replaces it. */
+  soldOutByInventory: boolean;
   /** Own prices by size (variant id); sizes missing here use the shared price. */
   prices: Record<string, number>;
 };

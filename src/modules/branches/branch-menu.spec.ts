@@ -1,19 +1,21 @@
 import { effectiveItem, isEmptyItemOverride, itemOverride, NO_OVERRIDES, toOverrides } from './branch-menu.js';
 
+const noNutrition = { calories: null, portionValue: null, portionUnit: null, serves: null };
+
 const item = {
   id: 'item-1',
   isAvailable: true,
   isVisible: true,
   variants: [
-    { id: 'small', nameAr: 'صغير', nameEn: 'Small', pricePiastres: 3000 },
-    { id: 'large', nameAr: 'كبير', nameEn: 'Large', pricePiastres: 4500 },
+    { id: 'small', nameAr: 'صغير', nameEn: 'Small', translations: {}, pricePiastres: 3000, ...noNutrition },
+    { id: 'large', nameAr: 'كبير', nameEn: 'Large', translations: {}, pricePiastres: 4500, ...noNutrition },
   ],
 };
 
 describe('branch menu overrides', () => {
   it('follows the shared menu without overrides', () => {
     expect(effectiveItem(item, NO_OVERRIDES)).toEqual({ visible: true, available: true, variants: item.variants });
-    expect(itemOverride(item, NO_OVERRIDES)).toEqual({ available: null, hidden: false, prices: {} });
+    expect(itemOverride(item, NO_OVERRIDES)).toEqual({ available: null, hidden: false, soldOutByInventory: false, prices: {} });
   });
 
   it('applies own prices to the sizes that have one', () => {
@@ -29,6 +31,12 @@ describe('branch menu overrides', () => {
     const backInStock = toOverrides([{ itemId: 'item-1', isAvailable: true, isHidden: false }], []);
     expect(effectiveItem({ ...item, isAvailable: false }, backInStock).available).toBe(true);
     expect(effectiveItem({ ...item, isAvailable: false }, NO_OVERRIDES).available).toBe(false);
+  });
+
+  it('reports a sold-out mark set by inventory', () => {
+    const byInventory = toOverrides([{ itemId: 'item-1', isAvailable: false, isHidden: false, soldOutByInventory: true }], []);
+    expect(itemOverride(item, byInventory)).toMatchObject({ available: false, soldOutByInventory: true });
+    expect(effectiveItem(item, byInventory).available).toBe(false);
   });
 
   it('hidden anywhere means not visible', () => {

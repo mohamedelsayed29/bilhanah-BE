@@ -77,6 +77,26 @@ export const PERMISSIONS = [
   'cash.approve',
   /** Registers and the reconciliation rules. */
   'cash.settings',
+  /** Stock, movements, ingredients, recipes and suppliers (quantities, not costs). */
+  'inventory.view',
+  /** Recording waste, entering counted quantities on an open stock count. */
+  'inventory.waste',
+  /** Receiving and voiding purchases, creating and posting stock counts, transfers out of the branch. */
+  'inventory.operate',
+  /** Ingredients, units, recipes, suppliers, reorder levels and inventory settings. */
+  'inventory.manage',
+  /** Unit costs, values, purchase prices, food cost and menu engineering. */
+  'inventory.costs',
+  /** Approving stock counts whose variance is above the threshold (when the settings ask for it). */
+  'inventory.approve',
+  /** Diners' reviews and feedback, the stats and the export (contact phones need reviews.respond). */
+  'reviews.view',
+  /** Replying publicly and following unhappy diners up (with their contact phone). */
+  'reviews.respond',
+  /** Publishing and hiding reviews. */
+  'reviews.moderate',
+  /** What diners are asked, what is published, and alerts. */
+  'reviews.settings',
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -110,6 +130,8 @@ const MANAGER: Permission[] = [
   'analytics.view', 'analytics.financial', 'staff.view', 'staff.manage', 'roles.assign', 'settings.operational', 'kitchen.view',
   'attendance.view',
   'cash.operate', 'cash.adjust', 'cash.view', 'cash.approve',
+  'inventory.view', 'inventory.waste', 'inventory.operate', 'inventory.costs',
+  'reviews.view', 'reviews.respond', 'reviews.moderate',
 ];
 
 /** What each role may do by default. */
@@ -118,15 +140,23 @@ export const ROLE_PERMISSIONS: Record<RestaurantRole, readonly Permission[]> = {
   MANAGER,
   CASHIER: ['dashboard.view', 'menu.view', 'orders.view', 'orders.complete', 'tables.view', 'tables.status', 'payments.view', 'payments.process', 'cash.operate'],
   WAITER: ['menu.view', 'orders.view', 'orders.create', 'tables.view', 'tables.status', 'reservations.view', 'reservations.manage', 'service.view', 'service.manage'],
-  KITCHEN: ['kitchen.view', 'menu.availability', 'orders.view', 'orders.update', 'orders.complete', 'orders.cancel'],
+  KITCHEN: ['kitchen.view', 'menu.availability', 'orders.view', 'orders.update', 'orders.complete', 'orders.cancel', 'inventory.view', 'inventory.waste'],
 };
 
 /** The extra permissions each staff role may be granted, on top of its defaults. */
+/** Every inventory permission may be granted to any staff role: the owner decides who does what. */
+const INVENTORY_PERMISSIONS: Permission[] = ['inventory.view', 'inventory.waste', 'inventory.operate', 'inventory.manage', 'inventory.costs', 'inventory.approve'];
+
+/** Likewise every reviews permission (a waiter who reads feedback, a cashier who replies...). */
+const REVIEW_PERMISSIONS: Permission[] = ['reviews.view', 'reviews.respond', 'reviews.moderate', 'reviews.settings'];
+
+const extra = (role: StaffRole) => [...INVENTORY_PERMISSIONS, ...REVIEW_PERMISSIONS].filter((permission) => !ROLE_PERMISSIONS[role].includes(permission));
+
 export const GRANTABLE_PERMISSIONS: Record<StaffRole, readonly Permission[]> = {
-  MANAGER: ['payments.refund', 'attendance.manage', 'attendance.approve', 'cash.settings'],
-  CASHIER: ['payments.refund', 'cash.adjust', 'cash.view'],
-  WAITER: ['orders.complete'],
-  KITCHEN: [],
+  MANAGER: ['payments.refund', 'attendance.manage', 'attendance.approve', 'cash.settings', ...extra('MANAGER')],
+  CASHIER: ['payments.refund', 'cash.adjust', 'cash.view', ...extra('CASHIER')],
+  WAITER: ['orders.complete', ...extra('WAITER')],
+  KITCHEN: extra('KITCHEN'),
 };
 
 /** A role's defaults plus the grants it may have (others are ignored). */
@@ -213,4 +243,14 @@ export const PERMISSION_LABELS: Record<Permission, [string, string]> = {
   'cash.view': ['يشوف شيفتات وتقارير الكاش', 'View cash shifts and reports'],
   'cash.approve': ['يوافق على فروقات وتسويات الكاش', 'Approve cash discrepancies and adjustments'],
   'cash.settings': ['إعدادات الخزن والكاش', 'Cash registers and rules'],
+  'inventory.view': ['يشوف المخزون', 'View inventory'],
+  'inventory.waste': ['يسجل الهالك ويجرد', 'Record waste and count stock'],
+  'inventory.operate': ['يستلم المشتريات ويرحّل الجرد والتحويلات', 'Receive purchases, post counts and transfers'],
+  'inventory.manage': ['يدير الخامات والوصفات والموردين', 'Manage ingredients, recipes and suppliers'],
+  'inventory.costs': ['يشوف التكاليف وتكلفة الأكل', 'View costs and food cost'],
+  'inventory.approve': ['يوافق على فروقات الجرد', 'Approve stock count variances'],
+  'reviews.view': ['يشوف التقييمات', 'View reviews'],
+  'reviews.respond': ['يرد على التقييمات ويتابع الزباين', 'Reply to reviews and follow diners up'],
+  'reviews.moderate': ['ينشر أو يخفي التقييمات', 'Publish and hide reviews'],
+  'reviews.settings': ['إعدادات التقييمات', 'Review settings'],
 };

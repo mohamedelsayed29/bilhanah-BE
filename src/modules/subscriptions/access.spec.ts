@@ -1,4 +1,4 @@
-import { resolveAccess } from './access.js';
+import { effectiveFeatures, resolveAccess } from './access.js';
 
 const day = 24 * 60 * 60 * 1000;
 const now = new Date('2026-10-20T12:00:00Z');
@@ -11,7 +11,7 @@ describe('resolveAccess', () => {
     expect(resolveAccess('ACTIVE', [trial], now)).toEqual({
       status: 'TRIAL',
       planCode: 'ADVANCED',
-      features: { menu: true, ordering: true, readyAlerts: true, branches: 10 },
+      features: { menu: true, ordering: true, readyAlerts: true, inventory: true, reviews: true, branches: 10 },
       currentPeriodEndsAt: at(20).toISOString(),
       trialEndsAt: at(20).toISOString(),
     });
@@ -26,7 +26,7 @@ describe('resolveAccess', () => {
     expect(resolveAccess('ACTIVE', [], now)).toMatchObject({
       status: 'INACTIVE',
       planCode: null,
-      features: { menu: false, ordering: false, readyAlerts: false, branches: 0 },
+      features: { menu: false, ordering: false, readyAlerts: false, inventory: false, reviews: false, branches: 0 },
       trialEndsAt: null,
     });
   });
@@ -36,11 +36,22 @@ describe('resolveAccess', () => {
     expect(resolveAccess('ACTIVE', [trial, paid], at(25))).toMatchObject({
       status: 'PAID',
       planCode: 'MENU',
-      features: { menu: true, ordering: false, readyAlerts: false, branches: 1 },
+      features: { menu: true, ordering: false, readyAlerts: false, inventory: false, reviews: false, branches: 1 },
     });
   });
 
   it('suspension overrides an active entitlement', () => {
     expect(resolveAccess('SUSPENDED', [trial], now)).toMatchObject({ status: 'SUSPENDED', planCode: null });
+  });
+});
+
+describe('effectiveFeatures', () => {
+  it('is the plan’s features with access, and nothing without', () => {
+    expect(effectiveFeatures(resolveAccess('ACTIVE', [trial], now))).toMatchObject({ ordering: true, inventory: true, reviews: true, branches: 10 });
+    const none = { menu: false, ordering: false, readyAlerts: false, inventory: false, reviews: false, branches: 0 };
+    expect(effectiveFeatures(resolveAccess('ACTIVE', [trial], at(21)))).toEqual(none);
+    expect(effectiveFeatures(resolveAccess('SUSPENDED', [trial], now))).toEqual(none);
+    // Even an access value that still carries a plan's features, once it is not TRIAL or PAID.
+    expect(effectiveFeatures({ ...resolveAccess('ACTIVE', [trial], now), status: 'INACTIVE' })).toEqual(none);
   });
 });
