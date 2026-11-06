@@ -97,4 +97,4 @@ ALTER TABLE "recommendation_events" ADD CONSTRAINT "recommendation_events_branch
 ALTER TABLE "recommendation_events" ADD CONSTRAINT "recommendation_events_rule_id_fkey" FOREIGN KEY ("rule_id") REFERENCES "recommendation_rules"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "order_items" ADD CONSTRAINT "order_items_recommendation_rule_id_fkey" FOREIGN KEY ("order_items_recommendation_rule_id") REFERENCES "recommendation_rules"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "order_items" ADD CONSTRAINT "order_items_recommendation_rule_id_fkey" FOREIGN KEY ("recommendation_rule_id") REFERENCES "recommendation_rules"("id") ON DELETE SET NULL ON UPDATE CASCADE;
