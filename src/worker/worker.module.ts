@@ -10,6 +10,7 @@ import { StorageModule } from '../infrastructure/storage/storage.module.js';
 import { VisitsService } from '../modules/analytics/visits.service.js';
 import { ExpiryRemindersService } from '../modules/billing/expiry-reminders.service.js';
 import { MediaService } from '../modules/media/media.service.js';
+import { SupportAttachmentsService } from '../modules/support/tickets/support-attachments.service.js';
 import { trackingTokensProvider } from '../modules/orders/tracking-token.js';
 import { EmailProcessor } from './email.processor.js';
 import { MaintenanceProcessor } from './maintenance.processor.js';
@@ -25,6 +26,7 @@ import { ShopMaintenanceService } from './shop-maintenance.service.js';
     PushProcessor,
     trackingTokensProvider,
     MediaService,
+    SupportAttachmentsService,
     ExpiryRemindersService,
     MaintenanceService,
     ShopMaintenanceService,

@@ -6,6 +6,7 @@ import { MAINTENANCE_QUEUE, queueConnection } from '../infrastructure/queues/que
 import { ExpiryRemindersService } from '../modules/billing/expiry-reminders.service.js';
 import { VisitsService } from '../modules/analytics/visits.service.js';
 import { MediaService } from '../modules/media/media.service.js';
+import { SupportAttachmentsService } from '../modules/support/tickets/support-attachments.service.js';
 import { MaintenanceService } from './maintenance.service.js';
 import { ShopMaintenanceService } from './shop-maintenance.service.js';
 
@@ -22,6 +23,7 @@ export class MaintenanceProcessor implements OnApplicationBootstrap, OnApplicati
   constructor(
     private readonly maintenance: MaintenanceService,
     private readonly media: MediaService,
+    private readonly supportAttachments: SupportAttachmentsService,
     private readonly reminders: ExpiryRemindersService,
     private readonly shop: ShopMaintenanceService,
     private readonly visits: VisitsService,
@@ -44,8 +46,10 @@ export class MaintenanceProcessor implements OnApplicationBootstrap, OnApplicati
         const result = await this.maintenance.purgeExpired();
         // Uploads get a day to be attached to an item or the restaurant.
         const images = await this.media.purgeUnused(new Date(Date.now() - 24 * HOUR_MS));
+        // Support screenshots never sent with a ticket or reply, likewise.
+        const attachments = await this.supportAttachments.purgeUnlinked(new Date(Date.now() - 24 * HOUR_MS));
         const shop = await this.shop.run();
-        this.logger.log({ ...result, unusedImages: images, ...shop }, 'Purged expired records');
+        this.logger.log({ ...result, unusedImages: images, unlinkedSupportAttachments: attachments, ...shop }, 'Purged expired records');
         await this.reminders.sendDue();
         // Visit counters, Redis to Postgres.
         await this.visits.flush();

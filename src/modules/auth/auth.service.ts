@@ -104,7 +104,11 @@ export class AuthService {
     this.sessionMaxMs = config.get('SESSION_MAX_DAYS', { infer: true }) * DAY_MS;
     this.adminSessionMaxMs = config.get('ADMIN_SESSION_HOURS', { infer: true }) * 60 * 60 * 1000;
     this.rememberMs = config.get('REMEMBER_ME_DAYS', { infer: true }) * DAY_MS;
+    this.adminMfaDisabled = config.get('ADMIN_MFA_DISABLED', { infer: true }) && config.get('NODE_ENV', { infer: true }) !== 'production';
+    if (this.adminMfaDisabled) new Logger(AuthService.name).warn('ADMIN_MFA_DISABLED: administrators sign in without an authenticator code (development only).');
   }
+
+  private readonly adminMfaDisabled: boolean;
 
   async register(input: z.output<typeof registerOwnerSchema>): Promise<void> {
     // Hash before the lookup so new and existing emails take similar time.
@@ -211,6 +215,8 @@ export class AuthService {
     if (user.status !== 'ACTIVE') {
       throw new ForbiddenException({ code: AUTH_ERROR_CODES.ACCOUNT_SUSPENDED, message: 'This account is suspended.' });
     }
+    if (this.adminMfaDisabled) return this.startSession(user, meta);
+    if (!input.code) throw invalidCredentials();
     if (!user.totpSecret) {
       throw new ForbiddenException({
         code: ADMIN_ERROR_CODES.MFA_NOT_SET_UP,

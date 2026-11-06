@@ -19,6 +19,8 @@ redisUrl.pathname = '/1';
 Object.assign(process.env, {
   NODE_ENV: 'test',
   LOG_LEVEL: 'warn',
+  // Authenticator codes are always required in tests, whatever the local .env says.
+  ADMIN_MFA_DISABLED: 'false',
   DATABASE_URL: databaseUrl.toString(),
   REDIS_URL: redisUrl.toString(),
   CORS_ORIGINS: 'http://dashboard.test',

@@ -4,6 +4,7 @@ import {
   TABLE_SESSION_EVENTS,
   type TableSessionUpdatedEvent,
   STAFF_ROLES,
+  effectivePermissions,
   type OwnerOrder,
   type OwnerServiceRequest,
   type PublicServiceRequest,
@@ -17,8 +18,11 @@ import {
   type RestaurantUpdatedEvent,
   type TableUpdatedEvent,
   REALTIME_PATH,
+  SUPPORT_EVENTS,
+  SUPPORT_NAMESPACE,
+  type SupportTypingEvent,
+  type SupportUpdatedEvent,
   type TrackedOrderEvent,
-  effectivePermissions,
   type OwnerReviewListItem,
   REVIEW_EVENTS,
   type ReviewRealtimeEvent,
@@ -39,6 +43,8 @@ const tableSessionRoom = (sessionId: string) => `table-session:${sessionId}`;
 /** Reviews go only to sockets whose account holds reviews.view, so they have rooms of their own. */
 const reviewsRestaurantRoom = (restaurantId: string) => `reviews:restaurant:${restaurantId}`;
 const reviewsBranchRoom = (branchId: string) => `reviews:branch:${branchId}`;
+const SUPPORT_AGENTS = 'support:agents';
+const supportUserRoom = (userId: string) => `support:user:${userId}`;
 
 /**
  * Live order updates over Socket.IO (WebSocket only, so no sticky sessions
@@ -60,6 +66,7 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
   private owners?: Namespace;
   private trackers?: Namespace;
   private tables?: Namespace;
+  private support?: Namespace;
   private adapterClients: Redis[] = [];
 
   constructor(
@@ -99,6 +106,21 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
       if (!orderId) return next(new Error('ORDER_NOT_FOUND'));
       void socket.join(orderRoom(orderId));
       next();
+    });
+
+    // Support: administrators join the agents' room; restaurant users their own room.
+    this.support = this.io.of(SUPPORT_NAMESPACE);
+    this.support.use((socket, next) => {
+      this.authenticateSupport(socket).then(
+        () => next(),
+        () => next(new Error('UNAUTHENTICATED')),
+      );
+    });
+    this.support.on('connection', (socket) => {
+      socket.on(SUPPORT_EVENTS.TYPING, (payload: unknown) => {
+        const ticketId = typeof payload === 'object' && payload !== null ? (payload as { ticketId?: unknown }).ticketId : null;
+        if (typeof ticketId === 'string' && /^[0-9a-f-]{36}$/i.test(ticketId)) void this.relayTyping(socket, ticketId).catch(() => undefined);
+      });
     });
 
     this.tables = this.io.of('/table');
@@ -149,6 +171,50 @@ export class RealtimeService implements OnApplicationBootstrap, OnApplicationShu
     this.owners
       ?.to([restaurantRoom(restaurantId), branchRoom(branchId)])
       .emit(REALTIME_EVENTS.RESTAURANT_UPDATED, { branchId, ordering } satisfies RestaurantUpdatedEvent);
+  }
+
+  /** A ticket changed: every agent's console, and (when it concerns them) the restaurant users given. */
+  emitSupportUpdated(ticketId: string, customerIds: string[] = []): void {
+    const event = { ticketId } satisfies SupportUpdatedEvent;
+    this.support?.to(SUPPORT_AGENTS).emit(SUPPORT_EVENTS.UPDATED, event);
+    if (customerIds.length) this.support?.to(customerIds.map(supportUserRoom)).emit(SUPPORT_EVENTS.UPDATED, event);
+  }
+
+  /** "Is typing": from the restaurant to the agents, or from an agent to the ticket's requester and owner. */
+  private async relayTyping(socket: Socket, ticketId: string): Promise<void> {
+    const data = socket.data as { userId: string; agent: boolean; name: string | null };
+    const ticket = await this.prisma.supportTicket.findUnique({
+      where: { id: ticketId },
+      select: { requesterId: true, status: true, restaurant: { select: { ownerId: true } } },
+    });
+    if (!ticket || ticket.status === 'CLOSED') return;
+    if (data.agent) {
+      const event = { ticketId, side: 'AGENT', name: data.name } satisfies SupportTypingEvent;
+      this.support?.to([supportUserRoom(ticket.requesterId), supportUserRoom(ticket.restaurant.ownerId)]).emit(SUPPORT_EVENTS.TYPING, event);
+    } else if (data.userId === ticket.requesterId || data.userId === ticket.restaurant.ownerId) {
+      const event = { ticketId, side: 'CUSTOMER', name: null } satisfies SupportTypingEvent;
+      this.support?.to(SUPPORT_AGENTS).emit(SUPPORT_EVENTS.TYPING, event);
+    }
+  }
+
+  private async authenticateSupport(socket: Socket): Promise<void> {
+    const token = socket.handshake.auth['token'];
+    const claims = typeof token === 'string' ? await this.accessTokens.verify(token) : null;
+    if (!claims) throw new Error('UNAUTHENTICATED');
+    const session = await this.prisma.session.findUnique({
+      where: { id: claims.sid },
+      select: { userId: true, revokedAt: true, expiresAt: true, user: { select: { role: true, status: true, fullName: true, permissionGrants: true } } },
+    });
+    if (!session || session.userId !== claims.sub || session.revokedAt || session.expiresAt <= new Date() || session.user.status !== 'ACTIVE') {
+      throw new Error('UNAUTHENTICATED');
+    }
+    const agent = session.user.role === 'ADMIN';
+    // Restaurant users need the support permission, as for the support API.
+    if (!agent && !effectivePermissions(session.user.role, session.user.permissionGrants).includes('support.use')) throw new Error('UNAUTHENTICATED');
+    socket.data = { userId: session.userId, agent, name: agent ? session.user.fullName.split(/\s+/)[0] ?? null : null };
+    await socket.join(agent ? SUPPORT_AGENTS : supportUserRoom(session.userId));
+    const timer = setTimeout(() => socket.disconnect(true), Math.max(0, claims.exp * 1000 - Date.now()));
+    socket.on('disconnect', () => clearTimeout(timer));
   }
 
   async onApplicationShutdown(): Promise<void> {

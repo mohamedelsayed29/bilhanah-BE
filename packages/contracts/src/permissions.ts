@@ -97,6 +97,8 @@ export const PERMISSIONS = [
   'reviews.moderate',
   /** What diners are asked, what is published, and alerts. */
   'reviews.settings',
+  /** The support assistant and the restaurant's tickets with Bilhanah support. */
+  'support.use',
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -132,6 +134,7 @@ const MANAGER: Permission[] = [
   'cash.operate', 'cash.adjust', 'cash.view', 'cash.approve',
   'inventory.view', 'inventory.waste', 'inventory.operate', 'inventory.costs',
   'reviews.view', 'reviews.respond', 'reviews.moderate',
+  'support.use',
 ];
 
 /** What each role may do by default. */
@@ -154,8 +157,8 @@ const extra = (role: StaffRole) => [...INVENTORY_PERMISSIONS, ...REVIEW_PERMISSI
 
 export const GRANTABLE_PERMISSIONS: Record<StaffRole, readonly Permission[]> = {
   MANAGER: ['payments.refund', 'attendance.manage', 'attendance.approve', 'cash.settings', ...extra('MANAGER')],
-  CASHIER: ['payments.refund', 'cash.adjust', 'cash.view', ...extra('CASHIER')],
-  WAITER: ['orders.complete', ...extra('WAITER')],
+  CASHIER: ['payments.refund', 'cash.adjust', 'cash.view', 'support.use', ...extra('CASHIER')],
+  WAITER: ['orders.complete', 'support.use', ...extra('WAITER')],
   KITCHEN: extra('KITCHEN'),
 };
 
@@ -253,4 +256,5 @@ export const PERMISSION_LABELS: Record<Permission, [string, string]> = {
   'reviews.respond': ['يرد على التقييمات ويتابع الزباين', 'Reply to reviews and follow diners up'],
   'reviews.moderate': ['ينشر أو يخفي التقييمات', 'Publish and hide reviews'],
   'reviews.settings': ['إعدادات التقييمات', 'Review settings'],
+  'support.use': ['الدعم الفني ومساعد بالهنا', 'Support assistant and tickets'],
 };

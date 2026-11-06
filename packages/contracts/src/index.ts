@@ -31,3 +31,4 @@ export * from './inventory.js';
 export * from './review-display.js';
 export * from './reviews.js';
 export * from './table-sessions.js';
+export * from './support.js';

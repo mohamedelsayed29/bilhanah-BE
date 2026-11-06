@@ -15,7 +15,8 @@ export const ADMIN_ERROR_CODES = {
 export const adminLoginSchema = z.object({
   email: emailSchema,
   password: z.string().min(1).max(128),
-  code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit code.'),
+  /** Required unless the API runs locally with ADMIN_MFA_DISABLED. */
+  code: z.string().trim().regex(/^(\d{6})?$/, 'Enter the 6-digit code.').optional().transform((value) => value || undefined),
 });
 
 const reasonSchema = z.string().trim().min(3).max(300);

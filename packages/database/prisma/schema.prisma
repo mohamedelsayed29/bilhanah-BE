@@ -133,6 +133,17 @@ model User {
   reviewFollowUps          Review[]                 @relation("ReviewAssignee")
   reviewEvents             ReviewEvent[]            @relation("ReviewEventActor")
   reviewEventAssignments   ReviewEvent[]            @relation("ReviewEventAssignee")
+  faqRevisions             FaqRevision[]            @relation("FaqRevisionEditor")
+  faqInteractions          FaqInteraction[]         @relation("UserFaqInteractions")
+  assistantSessions        AssistantSession[]       @relation("UserAssistantSessions")
+  supportTickets           SupportTicket[]          @relation("SupportTicketRequester")
+  assignedSupportTickets   SupportTicket[]          @relation("SupportTicketAssignee")
+  supportMessages          SupportMessage[]         @relation("SupportMessageAuthor")
+  supportAttachments       SupportAttachment[]      @relation("SupportAttachmentUploader")
+  supportAssignments       SupportAssignment[]      @relation("SupportAssignmentAssignee")
+  supportAssignmentsMade   SupportAssignment[]      @relation("SupportAssignmentAssigner")
+  supportActivity          SupportTicketActivity[]  @relation("SupportActivityActor")
+  supportNotifications     SupportNotification[]    @relation("SupportNotificationRecipient")
 
   @@index([staffRestaurantId])
   @@index([staffBranchId])
@@ -276,6 +287,9 @@ model Restaurant {
   stockTransfers        StockTransfer[]
   reviewSettings        ReviewSettings?
   reviews               Review[]
+  faqInteractions       FaqInteraction[]       @relation("RestaurantFaqInteractions")
+  assistantSessions     AssistantSession[]     @relation("RestaurantAssistantSessions")
+  supportTickets        SupportTicket[]        @relation("RestaurantSupportTickets")
 
   @@map("restaurants")
 }
@@ -1111,16 +1125,16 @@ model Order {
   stockDeductedAt  DateTime?           @map("stock_deducted_at") @db.Timestamptz(3)
   updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  restaurant        Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  branch            Branch             @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  table             Table?             @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  restaurant        Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch            Branch               @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  table             Table?               @relation(fields: [tableId], references: [id], onDelete: SetNull)
   items             OrderItem[]
   pushSubscriptions PushSubscription[]
   statusEvents      OrderStatusEvent[]
   tableTransfers    OrderTableTransfer[]
   itemEvents        OrderItemEvent[]
   cashTransactions  CashTransaction[]
-  tableSession      TableSession?      @relation(fields: [tableSessionId], references: [id], onDelete: SetNull)
+  tableSession      TableSession?        @relation(fields: [tableSessionId], references: [id], onDelete: SetNull)
   tableCartItems    TableCartItem[]
   stockMovements    StockMovement[]
   review            Review?
@@ -2763,4 +2777,382 @@ model ReviewEvent {
 
   @@index([reviewId, createdAt])
   @@map("review_events")
+}
+
+// --- Support ------------------------------------------------------------------
+// A FAQ assistant in the restaurant dashboard, and tickets for Bilhanah's support team (admins).
+// See bilhanah-backend/docs/SUPPORT.md.
+
+enum SupportTopic {
+  GETTING_STARTED
+  RESTAURANT_SETUP
+  MENU
+  QR_TABLES
+  ORDERS
+  PAYMENTS
+  BRANCHES
+  BILLING
+  ACCOUNT
+  TROUBLESHOOTING
+
+  @@map("support_topic")
+}
+
+enum FaqStatus {
+  DRAFT
+  PUBLISHED
+
+  @@map("faq_status")
+}
+
+enum FaqInteractionKind {
+  VIEW
+  SEARCH
+  FEEDBACK
+
+  @@map("faq_interaction_kind")
+}
+
+/// A group of FAQs, named in both languages.
+model FaqCategory {
+  id        String       @id @default(uuid()) @db.Uuid
+  slug      String       @unique
+  topic     SupportTopic
+  nameAr    String       @map("name_ar")
+  nameEn    String       @map("name_en")
+  /// A Phosphor icon name the dashboard maps to an icon.
+  icon      String       @default("question")
+  sortOrder Int          @default(0) @map("sort_order")
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  articles FaqArticle[]
+
+  @@map("faq_categories")
+}
+
+/// One question and its fixed answer in one language. The same question in another language shares its key.
+model FaqArticle {
+  id          String    @id @default(uuid()) @db.Uuid
+  key         String
+  language    Language
+  categoryId  String    @map("category_id") @db.Uuid
+  question    String
+  /// Markdown subset (paragraphs, bold, lists, links).
+  answer      String
+  keywords    String[]  @default([])
+  /// Keys of related questions (in the same language).
+  relatedKeys String[]  @default([]) @map("related_keys")
+  /// Offered when the assistant opens.
+  suggested   Boolean   @default(false)
+  sortOrder   Int       @default(0) @map("sort_order")
+  status      FaqStatus @default(DRAFT)
+  version     Int       @default(1)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  category     FaqCategory      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  revisions    FaqRevision[]
+  interactions FaqInteraction[]
+  tickets      SupportTicket[]
+
+  @@unique([key, language])
+  @@index([language, status, categoryId, sortOrder])
+  @@map("faq_articles")
+}
+
+/// The article as it was at each version, and who changed it.
+model FaqRevision {
+  id        String    @id @default(uuid()) @db.Uuid
+  articleId String    @map("article_id") @db.Uuid
+  version   Int
+  question  String
+  answer    String
+  keywords  String[]  @default([])
+  status    FaqStatus
+  editorId  String?   @map("editor_id") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  article FaqArticle @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  editor  User?      @relation("FaqRevisionEditor", fields: [editorId], references: [id], onDelete: SetNull)
+
+  @@unique([articleId, version])
+  @@map("faq_revisions")
+}
+
+/// Views, searches and "was this helpful?" answers, per restaurant and user (one answer per user and article).
+model FaqInteraction {
+  id           String             @id @default(uuid()) @db.Uuid
+  kind         FaqInteractionKind
+  articleId    String?            @map("article_id") @db.Uuid
+  restaurantId String?            @map("restaurant_id") @db.Uuid
+  userId       String?            @map("user_id") @db.Uuid
+  sessionId    String?            @map("session_id") @db.Uuid
+  helpful      Boolean?
+  query        String?
+  resultCount  Int?               @map("result_count")
+  createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  article    FaqArticle? @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  restaurant Restaurant? @relation("RestaurantFaqInteractions", fields: [restaurantId], references: [id], onDelete: Cascade)
+  user       User?       @relation("UserFaqInteractions", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([articleId, kind])
+  @@index([restaurantId, createdAt])
+  @@map("faq_interactions")
+}
+
+/// Where a conversation is with reaching a person: asking the customer what the problem is, or not.
+enum AssistantHandoff {
+  NONE
+  COLLECTING
+
+  @@map("assistant_handoff")
+}
+
+/// How a ticket was opened: the ticket form, or a live chat from the assistant.
+enum SupportChannel {
+  FORM
+  CHAT
+
+  @@map("support_channel")
+}
+
+enum AssistantMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+
+  @@map("assistant_message_role")
+}
+
+/// A user's conversation with the assistant; the latest one is restored when the panel opens again.
+model AssistantSession {
+  id           String           @id @default(uuid()) @db.Uuid
+  restaurantId String           @map("restaurant_id") @db.Uuid
+  userId       String           @map("user_id") @db.Uuid
+  /// Which assistant provider answers it (faq today).
+  provider     String
+  language     Language
+  /// COLLECTING: the customer asked for a person and the next message is their problem.
+  handoff      AssistantHandoff @default(NONE)
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant Restaurant         @relation("RestaurantAssistantSessions", fields: [restaurantId], references: [id], onDelete: Cascade)
+  user       User               @relation("UserAssistantSessions", fields: [userId], references: [id], onDelete: Cascade)
+  messages   AssistantMessage[]
+  tickets    SupportTicket[]
+
+  @@index([userId, updatedAt])
+  @@map("assistant_sessions")
+}
+
+/// One message in the unified format: a list of blocks (see AssistantBlock in contracts).
+model AssistantMessage {
+  id        String               @id @default(uuid()) @db.Uuid
+  sessionId String               @map("session_id") @db.Uuid
+  role      AssistantMessageRole
+  provider  String
+  blocks    Json
+  createdAt DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  session AssistantSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+  @@map("assistant_messages")
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_FOR_CUSTOMER
+  RESOLVED
+  CLOSED
+
+  @@map("support_ticket_status")
+}
+
+enum SupportTicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+
+  @@map("support_ticket_priority")
+}
+
+enum SupportMessageSide {
+  CUSTOMER
+  AGENT
+
+  @@map("support_message_side")
+}
+
+enum SupportActivityKind {
+  CREATED
+  STATUS
+  PRIORITY
+  ASSIGNED
+  REPLIED
+  NOTE
+  REOPENED
+
+  @@map("support_activity_kind")
+}
+
+/// A restaurant's request to Bilhanah support, with its own lifecycle; BIL-{number}.
+model SupportTicket {
+  id                 String                @id @default(uuid()) @db.Uuid
+  /// Shown as BIL-{number}; the sequence starts at 10001.
+  number             Int                   @unique @default(autoincrement())
+  restaurantId       String                @map("restaurant_id") @db.Uuid
+  requesterId        String                @map("requester_id") @db.Uuid
+  subject            String
+  description        String
+  topic              SupportTopic
+  channel            SupportChannel        @default(FORM)
+  priority           SupportTicketPriority @default(NORMAL)
+  status             SupportTicketStatus   @default(OPEN)
+  /// The dashboard page it is about, if any.
+  module             String?
+  faqArticleId       String?               @map("faq_article_id") @db.Uuid
+  assistantSessionId String?               @map("assistant_session_id") @db.Uuid
+  assigneeId         String?               @map("assignee_id") @db.Uuid
+  firstResponseAt    DateTime?             @map("first_response_at") @db.Timestamptz(3)
+  resolvedAt         DateTime?             @map("resolved_at") @db.Timestamptz(3)
+  closedAt           DateTime?             @map("closed_at") @db.Timestamptz(3)
+  lastActivityAt     DateTime              @default(now()) @map("last_activity_at") @db.Timestamptz(3)
+  /// When the restaurant last opened it / an agent last opened it (for unread markers).
+  customerSeenAt     DateTime?             @map("customer_seen_at") @db.Timestamptz(3)
+  agentSeenAt        DateTime?             @map("agent_seen_at") @db.Timestamptz(3)
+  lastCustomerAt     DateTime              @default(now()) @map("last_customer_at") @db.Timestamptz(3)
+  lastAgentAt        DateTime?             @map("last_agent_at") @db.Timestamptz(3)
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  restaurant       Restaurant              @relation("RestaurantSupportTickets", fields: [restaurantId], references: [id], onDelete: Cascade)
+  requester        User                    @relation("SupportTicketRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  assignee         User?                   @relation("SupportTicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  faqArticle       FaqArticle?             @relation(fields: [faqArticleId], references: [id], onDelete: SetNull)
+  assistantSession AssistantSession?       @relation(fields: [assistantSessionId], references: [id], onDelete: SetNull)
+  messages         SupportMessage[]
+  attachments      SupportAttachment[]
+  assignments      SupportAssignment[]
+  activity         SupportTicketActivity[]
+  notifications    SupportNotification[]
+
+  @@index([restaurantId, lastActivityAt])
+  @@index([status, lastActivityAt])
+  @@index([assigneeId, status])
+  @@map("support_tickets")
+}
+
+/// A reply on a ticket; internal ones are notes between agents and never reach the restaurant.
+model SupportMessage {
+  id        String             @id @default(uuid()) @db.Uuid
+  ticketId  String             @map("ticket_id") @db.Uuid
+  authorId  String?            @map("author_id") @db.Uuid
+  side      SupportMessageSide
+  internal  Boolean            @default(false)
+  body      String
+  createdAt DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  ticket      SupportTicket       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author      User?               @relation("SupportMessageAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  attachments SupportAttachment[]
+
+  @@index([ticketId, createdAt])
+  @@map("support_messages")
+}
+
+/// An image (screenshot) on a ticket or a reply, kept private and re-encoded as WebP. Unlinked uploads are purged.
+model SupportAttachment {
+  id           String   @id @default(uuid()) @db.Uuid
+  uploaderId   String?  @map("uploader_id") @db.Uuid
+  /// The restaurant it was uploaded for (null for an agent's upload until it is linked).
+  restaurantId String?  @map("restaurant_id") @db.Uuid
+  ticketId     String?  @map("ticket_id") @db.Uuid
+  messageId    String?  @map("message_id") @db.Uuid
+  storageKey   String   @map("storage_key")
+  fileName     String   @map("file_name")
+  contentType  String   @map("content_type")
+  bytes        Int
+  width        Int
+  height       Int
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  uploader User?           @relation("SupportAttachmentUploader", fields: [uploaderId], references: [id], onDelete: SetNull)
+  ticket   SupportTicket?  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  message  SupportMessage? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+  @@index([uploaderId, createdAt])
+  @@map("support_attachments")
+}
+
+/// Every (re)assignment of a ticket: to whom, by whom, when.
+model SupportAssignment {
+  id           String   @id @default(uuid()) @db.Uuid
+  ticketId     String   @map("ticket_id") @db.Uuid
+  assigneeId   String?  @map("assignee_id") @db.Uuid
+  assignedById String?  @map("assigned_by_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  ticket     SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  assignee   User?         @relation("SupportAssignmentAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  assignedBy User?         @relation("SupportAssignmentAssigner", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+  @@map("support_assignments")
+}
+
+/// The ticket's history: creation, status, priority, assignment, replies and notes.
+model SupportTicketActivity {
+  id        String              @id @default(uuid()) @db.Uuid
+  ticketId  String              @map("ticket_id") @db.Uuid
+  actorId   String?             @map("actor_id") @db.Uuid
+  kind      SupportActivityKind
+  from      String?
+  to        String?
+  createdAt DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  actor  User?         @relation("SupportActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+  @@map("support_ticket_activity")
+}
+
+enum SupportNotificationKind {
+  TICKET_CREATED
+  CUSTOMER_REPLIED
+  TICKET_ASSIGNED
+  NEEDS_ATTENTION
+  AGENT_REPLIED
+  STATUS_CHANGED
+  TICKET_RESOLVED
+
+  @@map("support_notification_kind")
+}
+
+/// An in-dashboard notification. One row per recipient, ticket and kind: a repeat event while it is unread
+/// folds into it (count + 1) instead of piling up duplicates.
+model SupportNotification {
+  id           String                  @id @default(uuid()) @db.Uuid
+  recipientId  String                  @map("recipient_id") @db.Uuid
+  restaurantId String?                 @map("restaurant_id") @db.Uuid
+  ticketId     String                  @map("ticket_id") @db.Uuid
+  kind         SupportNotificationKind
+  count        Int                     @default(1)
+  readAt       DateTime?               @map("read_at") @db.Timestamptz(3)
+  createdAt    DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  recipient User          @relation("SupportNotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  ticket    SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@unique([recipientId, ticketId, kind])
+  @@index([recipientId, readAt, updatedAt])
+  @@map("support_notifications")
 }

@@ -95,6 +95,18 @@ export const envSchema = z.object({
   API_PUBLIC_URL: z.url().optional(),
 
   /**
+   * Local development only: administrators sign in with email and password, without the authenticator
+   * code. Ignored (codes stay required) whenever NODE_ENV is production.
+   */
+  ADMIN_MFA_DISABLED: z.stringbool().default(false),
+
+  /**
+   * Who answers the dashboard's support assistant. Only the FAQ provider exists today; a future AI
+   * provider registers under its own name (see docs/SUPPORT.md) and is chosen here.
+   */
+  SUPPORT_ASSISTANT_PROVIDER: z.enum(['faq']).default('faq'),
+
+  /**
    * Online payments with Paymob (Dashboard → Settings / Developers). Without
    * them, owners pay by transfer and the shop takes cash on delivery only.
    */

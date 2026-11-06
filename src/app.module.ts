@@ -21,6 +21,7 @@ import { BranchScopeModule } from './modules/branches/branch-scope.service.js';
 import { ContactModule } from './modules/contact/contact.module.js';
 import { KitchenModule } from './modules/kitchen/kitchen.module.js';
 import { MediaModule } from './modules/media/media.module.js';
+import { SupportModule } from './modules/support/support.module.js';
 import { MenusModule } from './modules/menus/menus.module.js';
 import { OrdersModule } from './modules/orders/orders.module.js';
 import { PaymentsModule } from './modules/payments/payments.module.js';
@@ -56,6 +57,7 @@ import { TableSessionsModule } from './modules/table-sessions/table-sessions.mod
     BranchesModule,
     RestaurantsModule,
     MediaModule,
+    SupportModule,
     MenusModule,
     PlansModule,
     ContactModule,
