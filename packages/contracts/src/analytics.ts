@@ -5,6 +5,8 @@
  * How a diner reached the menu: qr (the restaurant's QR code, ?src=qr), table
  * (a table QR, ?t=code) or link (anything else: a shared link, social media).
  */
+import type { DataSource, MenuSource } from './services.js';
+
 export const VISIT_SOURCES = ['qr', 'table', 'link'] as const;
 export type VisitSource = (typeof VISIT_SOURCES)[number];
 
@@ -34,6 +36,8 @@ export type RestaurantStats = {
   topItems: { nameAr: string; nameEn: string | null; quantity: number; revenuePiastres: number }[];
   /** False when the plan has no ordering: the dashboard shows visits only. */
   ordering: boolean;
+  /** Where the figures come from: orders placed through Bilhanah only; the menu and POS the restaurant uses. */
+  dataSource: { orders: DataSource; menuSource: MenuSource; externalPosName: string | null };
   /** The branch the orders figures are for; null for the whole restaurant. Visits are always restaurant-wide. */
   branchId: string | null;
   /** False without analytics.financial: every revenue and average figure is 0 and the dashboard hides them. */

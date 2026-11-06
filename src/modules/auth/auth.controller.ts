@@ -8,7 +8,9 @@ import {
   HttpStatus,
   Param,
   Patch,
+  Logger,
   Post,
+  Query,
   Req,
   Res,
   UseGuards,
@@ -16,6 +18,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import {
   adminLoginSchema,
+  type AuthProviders,
   type AuthSession,
   type AuthUser,
   changePasswordSchema,
@@ -43,6 +46,11 @@ import { AdminOriginGuard } from '../../common/guards/admin-origin.guard.js';
 /** The admin cookie only travels to the admin session routes. */
 const ADMIN_COOKIE_PATH = '/v1/auth/admin';
 import { AuthService, type IssuedSession } from './auth.service.js';
+import { GoogleAuthService, GoogleSignInError } from './google-auth.service.js';
+
+/** Ties Google's answer to the browser that started the sign-in (path-limited to the callback). */
+const OAUTH_COOKIE = 'bh_oauth';
+const OAUTH_COOKIE_PATH = '/v1/auth/google';
 
 const HOUR = 60 * 60;
 
@@ -51,11 +59,73 @@ const HOUR = 60 * 60;
 export class AuthController {
   private readonly secureCookies: boolean;
 
+  private readonly dashboardUrl: string;
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(
     private readonly auth: AuthService,
+    private readonly google: GoogleAuthService,
     config: ConfigService<Env, true>,
   ) {
     this.secureCookies = ['production', 'staging'].includes(config.get('NODE_ENV', { infer: true }));
+    this.dashboardUrl = config.get('DASHBOARD_URL', { infer: true }).replace(/\/$/, '');
+  }
+
+  /** Which sign-in providers this server offers (Google only when configured). */
+  @Get('providers')
+  @Header('Cache-Control', 'no-store')
+  providers(): AuthProviders {
+    return { google: this.google.enabled };
+  }
+
+  /**
+   * "Continue with Google": sends the browser to Google, with a cookie tying Google's answer to this
+   * browser. Signing up and signing in are the same trip.
+   */
+  @Get('google/start')
+  @Header('Cache-Control', 'no-store')
+  @RateLimit({ name: 'google-start:ip', limit: 30, windowSeconds: 15 * 60, by: 'ip' })
+  async googleStart(@Query('remember') remember: unknown, @Query('lang') lang: unknown, @Res() response: Response): Promise<void> {
+    try {
+      const { url, browserSecret } = await this.google.start({ remember: remember !== '0', language: lang === 'en' ? 'en' : 'ar' });
+      // Lax: the cookie must come back on Google's top-level redirect to the callback.
+      response.cookie(OAUTH_COOKIE, browserSecret, { httpOnly: true, secure: this.secureCookies, sameSite: 'lax', path: OAUTH_COOKIE_PATH, maxAge: 10 * 60 * 1000 });
+      response.redirect(302, url);
+    } catch (error) {
+      response.redirect(302, this.loginWithError(error));
+    }
+  }
+
+  /** Google's redirect back: opens a session (the dashboard restores it from the refresh cookie) or explains why not. */
+  @Get('google/callback')
+  @Header('Cache-Control', 'no-store')
+  @RateLimit({ name: 'google-callback:ip', limit: 30, windowSeconds: 15 * 60, by: 'ip' })
+  async googleCallback(
+    @Query('code') code: unknown,
+    @Query('state') state: unknown,
+    @Query('error') error: unknown,
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<void> {
+    response.clearCookie(OAUTH_COOKIE, { httpOnly: true, secure: this.secureCookies, sameSite: 'lax', path: OAUTH_COOKIE_PATH });
+    try {
+      const issued = await this.google.finish({
+        code: typeof code === 'string' ? code : undefined,
+        state: typeof state === 'string' ? state : undefined,
+        error: typeof error === 'string' ? error : undefined,
+        browserSecret: request.cookies?.[OAUTH_COOKIE],
+      }, { ipAddress: request.ip, userAgent: request.headers['user-agent'] });
+      this.withRefreshCookie(response, issued);
+      response.redirect(302, `${this.dashboardUrl}/`);
+    } catch (caught) {
+      response.redirect(302, this.loginWithError(caught));
+    }
+  }
+
+  private loginWithError(error: unknown): string {
+    if (!(error instanceof GoogleSignInError)) this.logger.error(error);
+    const reason = error instanceof GoogleSignInError ? error.reason : 'failed';
+    return `${this.dashboardUrl}/login?oauth_error=${reason}`;
   }
 
   @Post('register')

@@ -25,7 +25,10 @@ export type AccessStatus = 'TRIAL' | 'PAID' | 'INACTIVE' | 'SUSPENDED';
 export type RestaurantAccess = {
   status: AccessStatus;
   planCode: PlanCode | null;
+  /** What the restaurant may use: the plan's features narrowed to the services it has on (services.ts). */
   features: PlanFeatures;
+  /** What the plan itself includes, whatever services are on. */
+  planFeatures: PlanFeatures;
   currentPeriodEndsAt: string | null;
   trialEndsAt: string | null;
 };

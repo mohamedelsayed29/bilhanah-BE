@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomInt } from 'node:crypto';
-import { HttpException, HttpStatus, Inject, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, HttpException, HttpStatus, Inject, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import {
   ATTENDANCE_ERROR_CODES as CODES,
   ATTENDANCE_LIMITS,
@@ -11,6 +11,7 @@ import {
   type kioskPunchSchema,
   type KioskState,
   type PunchResult,
+  SERVICE_ERROR_CODES,
 } from '@bilhanah/contracts';
 import type { AttendanceKiosk as KioskRow, Employee as EmployeeRow } from '@bilhanah/database';
 import type { Redis } from 'ioredis';
@@ -20,6 +21,7 @@ import { REDIS } from '../../infrastructure/redis/redis.module.js';
 import { AuditService } from '../audit/audit.service.js';
 import { PasswordService } from '../auth/password.service.js';
 import { BranchScopeService } from '../branches/branch-scope.service.js';
+import { readServiceStates } from '../services/service-states.js';
 import { AttendanceService } from './attendance.service.js';
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -124,6 +126,10 @@ export class AttendanceKioskService {
     if (!token || token.length > 100) throw unauthorized();
     const kiosk = await this.prisma.attendanceKiosk.findUnique({ where: { tokenHash: sha256(token) } });
     if (!kiosk || kiosk.disabledAt) throw unauthorized();
+    // A restaurant that switched attendance off keeps its kiosks, but they stop taking punches.
+    if (!(await readServiceStates(this.prisma, kiosk.restaurantId)).ATTENDANCE) {
+      throw new ConflictException({ code: SERVICE_ERROR_CODES.SERVICE_INACTIVE, message: 'Attendance is switched off for this restaurant.', details: { service: 'ATTENDANCE' } });
+    }
     // Seen at most once a minute, to keep writes down.
     if (!kiosk.lastSeenAt || Date.now() - kiosk.lastSeenAt.getTime() > 60_000) {
       await this.prisma.attendanceKiosk.update({ where: { id: kiosk.id }, data: { lastSeenAt: new Date() } });

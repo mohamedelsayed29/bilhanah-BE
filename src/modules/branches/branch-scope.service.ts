@@ -1,6 +1,6 @@
 import { ForbiddenException, Global, Injectable, Module, NotFoundException } from '@nestjs/common';
 import { BRANCH_ERROR_CODES, COMMON_ERROR_CODES, effectivePermissions, type Permission, RESTAURANT_ERROR_CODES, type RestaurantRole } from '@bilhanah/contracts';
-import type { Branch, Prisma, RestaurantStatus } from '@bilhanah/database';
+import type { Branch, MenuSource, Prisma, RestaurantStatus } from '@bilhanah/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 
 /** Roles that work inside a restaurant. */
@@ -12,12 +12,12 @@ export type Scope = {
   role: RestaurantRole;
   /** What the caller may do (role defaults and grants), read fresh on each request. */
   permissions: ReadonlySet<Permission>;
-  restaurant: { id: string; name: string; subdomain: string; timezone: string; status: RestaurantStatus; orderPrepMinutes: number | null };
+  restaurant: { id: string; name: string; subdomain: string; timezone: string; status: RestaurantStatus; orderPrepMinutes: number | null; menuSource?: MenuSource; externalPosName?: string | null };
   /** A staff account tied to one branch; null for owners and all-branch staff. */
   fixedBranchId: string | null;
 };
 
-const restaurantSelect = { id: true, name: true, subdomain: true, timezone: true, status: true, orderPrepMinutes: true } satisfies Prisma.RestaurantSelect;
+const restaurantSelect = { id: true, name: true, subdomain: true, timezone: true, status: true, orderPrepMinutes: true, menuSource: true, externalPosName: true } satisfies Prisma.RestaurantSelect;
 
 export const restaurantNotFound = () =>
   new NotFoundException({ code: RESTAURANT_ERROR_CODES.RESTAURANT_NOT_FOUND, message: 'Restaurant not found.' });

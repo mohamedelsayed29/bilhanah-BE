@@ -23,6 +23,7 @@ import { isUniqueViolation } from '../../infrastructure/database/prisma-errors.j
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { PasswordService } from '../auth/password.service.js';
+import { readServiceStates } from '../services/service-states.js';
 import { effectiveFeatures } from '../subscriptions/access.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
 import { BranchScopeService, type Scope } from '../branches/branch-scope.service.js';
@@ -246,6 +247,7 @@ export class KitchenService {
       ordering: orderingSettings(branch, access.features.ordering),
       orderPrepMinutes: scope.restaurant.orderPrepMinutes,
       features: effectiveFeatures(access),
+      services: await readServiceStates(this.prisma, scope.restaurant.id),
     };
   }
 

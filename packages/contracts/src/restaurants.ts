@@ -8,6 +8,7 @@ import type { ImageSet } from './media.js';
 import type { PublicMenuCategory } from './menus.js';
 import { type OpeningHours, openingHoursSchema } from './opening-hours.js';
 import type { RestaurantAccess } from './plans.js';
+import type { RestaurantSetupSummary } from './services.js';
 import type { PublicBranch } from './branches.js';
 import type { PublicReviewsInfo } from './review-display.js';
 import { normalizeSubdomain, subdomainProblem, type SubdomainProblem } from './subdomains.js';
@@ -188,6 +189,8 @@ export type OwnerRestaurant = {
   instagramUrl: string | null;
   createdAt: string;
   access: RestaurantAccess;
+  /** Where the menu is, the POS, and which services are on (services.ts). */
+  setup: RestaurantSetupSummary;
   /** The main branch's ordering settings (openingHours is the main branch's too). */
   ordering: OrderingSettings;
   serviceRequests: ServiceRequestSettings;

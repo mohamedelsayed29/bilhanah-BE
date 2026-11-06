@@ -79,6 +79,8 @@ export class StatsService {
       },
       topItems: topItems.map((item) => ({ nameAr: item.nameAr, nameEn: item.nameEn, quantity: Number(item.quantity), revenuePiastres: money(Number(item.revenue)) })),
       ordering: access.features.ordering,
+      // Only orders placed through Bilhanah are counted; a POS's sales arrive only through an integration.
+      dataSource: { orders: 'BILHANAH', menuSource: restaurant.menuSource ?? 'BILHANAH', externalPosName: restaurant.externalPosName ?? null },
       branchId: branchId ?? null,
       financial,
     };

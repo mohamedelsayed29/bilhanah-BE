@@ -10,7 +10,22 @@ export const AUTH_ERROR_CODES = {
   EMAIL_NOT_VERIFIED: 'EMAIL_NOT_VERIFIED',
   ACCOUNT_SUSPENDED: 'ACCOUNT_SUSPENDED',
   ORIGIN_NOT_ALLOWED: 'ORIGIN_NOT_ALLOWED',
+  /** Google sign-in is not configured on this server. */
+  PROVIDER_DISABLED: 'PROVIDER_DISABLED',
 } as const;
+
+/** Sign-in providers besides email and password; each is on only when the server is configured for it. */
+export const AUTH_PROVIDERS = ['GOOGLE'] as const;
+export type AuthProviderName = (typeof AUTH_PROVIDERS)[number];
+/** GET /v1/auth/providers */
+export type AuthProviders = { google: boolean };
+
+/**
+ * Why "Continue with Google" did not sign someone in, sent back to the dashboard's login page as
+ * ?oauth_error=… (never details from Google).
+ */
+export const OAUTH_ERRORS = ['cancelled', 'failed', 'expired', 'email_unverified', 'suspended', 'not_allowed', 'disabled'] as const;
+export type OAuthError = (typeof OAUTH_ERRORS)[number];
 
 export const userRoleSchema = z.enum(['OWNER', 'ADMIN', 'KITCHEN', 'MANAGER', 'CASHIER', 'WAITER']);
 export type UserRole = z.infer<typeof userRoleSchema>;

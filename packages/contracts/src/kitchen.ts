@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { emailSchema } from './common.js';
 import { passwordSchema } from './auth.js';
 import type { PlanFeatures } from './plans.js';
+import type { ServiceStates } from './services.js';
 import type { OrderingSettings } from './restaurants.js';
 import { PERMISSIONS, type Permission, STAFF_ROLES, type StaffRole } from './permissions.js';
 
@@ -90,6 +91,8 @@ export type KitchenContext = {
    * so staff screens can offer inventory and the rest without probing their routes.
    */
   features: PlanFeatures;
+  /** Which services the restaurant has on (cash drawer, attendance, ...), so staff screens follow them too. */
+  services: ServiceStates;
 };
 
 /** GET /v1/kitchen-accounts/options: what the caller may do on the staff page. */

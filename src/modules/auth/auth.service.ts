@@ -235,6 +235,11 @@ export class AuthService {
     return this.startSession(user, meta);
   }
 
+  /** A session for an account a sign-in provider (Google) has vouched for; the provider checked the account first. */
+  startExternalSession(user: User, meta: ClientMeta, remember: boolean): Promise<IssuedSession> {
+    return this.startSession(user, meta, remember);
+  }
+
   private async startSession(user: User, meta: ClientMeta, remember: boolean | null = null): Promise<IssuedSession> {
     const secret = generateToken();
     const now = new Date();

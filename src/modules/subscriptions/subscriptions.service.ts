@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import type { RestaurantAccess } from '@bilhanah/contracts';
+import { featuresWithServices, type RestaurantAccess } from '@bilhanah/contracts';
 import type { Prisma, RestaurantStatus } from '@bilhanah/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
+import { readServiceStates } from '../services/service-states.js';
 import { resolveAccess } from './access.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -28,11 +29,16 @@ export class SubscriptionsService {
     });
   }
 
+  /** The restaurant's access: its plan, narrowed to the services it has on (docs/SERVICES.md). */
   async accessFor(restaurant: { id: string; status: RestaurantStatus }, now = new Date()): Promise<RestaurantAccess> {
-    const entitlements = await this.prisma.entitlement.findMany({
-      where: { restaurantId: restaurant.id },
-      select: { kind: true, planCode: true, startsAt: true, endsAt: true },
-    });
-    return resolveAccess(restaurant.status, entitlements, now);
+    const [entitlements, services] = await Promise.all([
+      this.prisma.entitlement.findMany({
+        where: { restaurantId: restaurant.id },
+        select: { kind: true, planCode: true, startsAt: true, endsAt: true },
+      }),
+      readServiceStates(this.prisma, restaurant.id),
+    ]);
+    const access = resolveAccess(restaurant.status, entitlements, now);
+    return { ...access, features: featuresWithServices(access.planFeatures, services) };
   }
 }

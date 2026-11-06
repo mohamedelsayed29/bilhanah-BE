@@ -40,6 +40,7 @@ import { isUniqueViolation } from '../../infrastructure/database/prisma-errors.j
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { zonedInstant } from '../attendance/attendance-rules.js';
 import { AuditService } from '../audit/audit.service.js';
+import { readServiceStates } from '../services/service-states.js';
 import { BranchScopeService, type Scope } from '../branches/branch-scope.service.js';
 
 type Tx = Prisma.TransactionClient;
@@ -298,6 +299,8 @@ export class CashService {
    */
   async recordOrderCash(tx: Tx, event: OrderCashEvent): Promise<void> {
     if (event.amountPiastres <= 0) return;
+    // With the cash drawer switched off, orders are paid without a drawer (and no shift is required).
+    if (!(await readServiceStates(tx, event.scope.restaurant.id)).CASH_DRAWER) return;
     const settings = await this.settings(event.scope.restaurant.id, tx);
     const shiftId = await this.drawerFor(tx, event.scope.userId, event.branchId);
     if (!shiftId) {

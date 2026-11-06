@@ -26,6 +26,7 @@ export function resolveAccess(
       status: restaurantStatus === 'SUSPENDED' ? 'SUSPENDED' : 'INACTIVE',
       planCode: null,
       features: NO_FEATURES,
+      planFeatures: NO_FEATURES,
       currentPeriodEndsAt: null,
       trialEndsAt,
     };
@@ -35,6 +36,7 @@ export function resolveAccess(
     status: current.kind,
     planCode: current.planCode,
     features: PLAN_FEATURES[current.planCode],
+    planFeatures: PLAN_FEATURES[current.planCode],
     currentPeriodEndsAt: current.endsAt.toISOString(),
     trialEndsAt,
   };

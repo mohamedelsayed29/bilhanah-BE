@@ -35,6 +35,7 @@ import { ReviewsPublicService } from '../reviews/reviews-public.service.js';
 import { BranchScopeService, branchNotFound } from '../branches/branch-scope.service.js';
 import { orderingSettings } from '../branches/branches.service.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
+import { RestaurantServicesService } from '../services/services.service.js';
 
 const withBranding = { logo: true, cover: true } satisfies Prisma.RestaurantInclude;
 type RestaurantRow = Prisma.RestaurantGetPayload<{ include: typeof withBranding }>;
@@ -78,6 +79,7 @@ export class RestaurantsService {
     private readonly scopes: BranchScopeService,
     private readonly recommendations: RecommendationsService,
     private readonly reviews: ReviewsPublicService,
+    private readonly services: RestaurantServicesService,
     config: ConfigService<Env, true>,
   ) {
     this.urlTemplate = config.get('RESTAURANT_URL_TEMPLATE', { infer: true });
@@ -223,7 +225,8 @@ export class RestaurantsService {
 
   private async toPublicRestaurant(restaurant: RestaurantRow, branch: Branch, branches: Branch[]): Promise<PublicRestaurant> {
     const access = await this.subscriptions.accessFor(restaurant);
-    if (!hasAccess(access)) {
+    // A restaurant that switched the digital menu off (it keeps its own QR menu, or none) shows no Bilhanah menu.
+    if (!hasAccess(access) || !access.features.menu) {
       return {
         availability: 'TEMPORARILY_UNAVAILABLE',
         subdomain: restaurant.subdomain,
@@ -310,6 +313,7 @@ export class RestaurantsService {
       instagramUrl: restaurant.instagramUrl,
       createdAt: restaurant.createdAt.toISOString(),
       access,
+      setup: await this.services.summary(restaurant),
       ordering: orderingSettings(main, access.features.ordering),
       serviceRequests: {
         enabled: restaurant.serviceRequestsEnabled,

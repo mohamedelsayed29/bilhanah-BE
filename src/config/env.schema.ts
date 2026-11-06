@@ -101,6 +101,15 @@ export const envSchema = z.object({
   ADMIN_MFA_DISABLED: z.stringbool().default(false),
 
   /**
+   * "Continue with Google" for restaurant owners (Google Cloud → APIs & Services → Credentials →
+   * OAuth client ID, type Web application). Off until both are set. The authorised redirect URI to
+   * register at Google is GOOGLE_REDIRECT_URI, or API_PUBLIC_URL + /v1/auth/google/callback.
+   */
+  GOOGLE_CLIENT_ID: z.string().trim().min(10).optional(),
+  GOOGLE_CLIENT_SECRET: z.string().trim().min(10).optional(),
+  GOOGLE_REDIRECT_URI: z.url().optional(),
+
+  /**
    * Who answers the dashboard's support assistant. Only the FAQ provider exists today; a future AI
    * provider registers under its own name (see docs/SUPPORT.md) and is chosen here.
    */
@@ -137,6 +146,14 @@ const envSchemaChecked = envSchema
     for (const key of paymob) {
       if (!env[key]) context.addIssue({ code: 'custom', path: [key], message: 'Required with the other PAYMOB_* settings.' });
     }
+  })
+  .refine((env) => !env.GOOGLE_CLIENT_ID === !env.GOOGLE_CLIENT_SECRET, {
+    message: 'Set both GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, or neither.',
+    path: ['GOOGLE_CLIENT_SECRET'],
+  })
+  .refine((env) => !env.GOOGLE_CLIENT_ID || Boolean(env.GOOGLE_REDIRECT_URI ?? env.API_PUBLIC_URL), {
+    message: 'Google sign-in needs GOOGLE_REDIRECT_URI or API_PUBLIC_URL.',
+    path: ['GOOGLE_REDIRECT_URI'],
   })
   .refine((env) => !env.VAPID_PUBLIC_KEY === !env.VAPID_PRIVATE_KEY, {
     message: 'Set both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY, or neither.',

@@ -26,6 +26,7 @@ import { AccessTokenGuard } from '../../common/guards/access-token.guard.js';
 import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
 import { RequireAnyPermission, RequirePermission, RolesGuard } from '../../common/guards/roles.guard.js';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
+import { RequireService, ServiceGuard } from '../services/service.guard.js';
 import { CashService } from './cash.service.js';
 
 const idParam = new ZodValidationPipe(z.uuid());
@@ -39,7 +40,8 @@ const WRITE_LIMIT = { name: 'cash-write:ip', limit: 240, windowSeconds: 60, by: 
  * The service checks which shift the caller may touch.
  */
 @Controller('cash')
-@UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
+@UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard, ServiceGuard)
+@RequireService('CASH_DRAWER')
 @RequireAnyPermission('cash.operate', 'cash.view', 'cash.approve', 'cash.settings')
 export class CashController {
   constructor(private readonly cash: CashService) {}

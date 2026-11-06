@@ -46,6 +46,7 @@ import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
 import { BranchScopeService } from '../branches/branch-scope.service.js';
 import { recordsTable, summaryTable, toCsv, toXls } from './attendance-export.js';
 import { AttendanceKioskService } from './attendance-kiosk.service.js';
+import { RequireService, ServiceGuard } from '../services/service.guard.js';
 import { AttendanceService } from './attendance.service.js';
 
 const idParam = new ZodValidationPipe(z.uuid());
@@ -59,7 +60,8 @@ const overviewQuery = z.object({ date: z.iso.date().optional(), branchId: z.uuid
  * The /me routes are the signed-in employee's own attendance. Branch-tied managers stay in their branch.
  */
 @Controller('attendance')
-@UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard)
+@UseGuards(AccessTokenGuard, RolesGuard, RateLimitGuard, ServiceGuard)
+@RequireService('ATTENDANCE')
 @RequirePermission('attendance.view')
 export class AttendanceController {
   constructor(

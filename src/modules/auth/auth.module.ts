@@ -6,6 +6,7 @@ import type { Env } from '../../config/env.schema.js';
 import { AccessTokenService, JWT_AUDIENCE, JWT_ISSUER } from './access-token.service.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
+import { GoogleAuthService } from './google-auth.service.js';
 import { PasswordService } from './password.service.js';
 
 @Module({
@@ -20,7 +21,7 @@ import { PasswordService } from './password.service.js';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, PasswordService, AccessTokenService, AccessTokenGuard],
+  providers: [AuthService, GoogleAuthService, PasswordService, AccessTokenService, AccessTokenGuard],
   // Other modules import AuthModule to protect routes with AccessTokenGuard.
   exports: [AccessTokenService, AccessTokenGuard, PasswordService],
 })

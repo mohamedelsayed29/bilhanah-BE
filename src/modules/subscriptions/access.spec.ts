@@ -12,6 +12,7 @@ describe('resolveAccess', () => {
       status: 'TRIAL',
       planCode: 'ADVANCED',
       features: { menu: true, ordering: true, readyAlerts: true, inventory: true, reviews: true, branches: 10 },
+      planFeatures: { menu: true, ordering: true, readyAlerts: true, inventory: true, reviews: true, branches: 10 },
       currentPeriodEndsAt: at(20).toISOString(),
       trialEndsAt: at(20).toISOString(),
     });

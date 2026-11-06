@@ -30,6 +30,7 @@ import { PwaModule } from './modules/pwa/pwa.module.js';
 import { ShopModule } from './modules/shop/shop.module.js';
 import { PlansModule } from './modules/plans/plans.module.js';
 import { RestaurantsModule } from './modules/restaurants/restaurants.module.js';
+import { RestaurantServicesModule } from './modules/services/services.module.js';
 import { TablesModule } from './modules/tables/tables.module.js';
 import { ServiceRequestsModule } from './modules/service-requests/service-requests.module.js';
 import { RecommendationsModule } from './modules/recommendations/recommendations.module.js';
@@ -58,6 +59,7 @@ import { TableSessionsModule } from './modules/table-sessions/table-sessions.mod
     BranchScopeModule,
     BranchesModule,
     RestaurantsModule,
+    RestaurantServicesModule,
     MediaModule,
     SupportModule,
     MenusModule,
