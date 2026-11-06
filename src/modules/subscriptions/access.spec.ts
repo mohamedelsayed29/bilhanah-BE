@@ -1,4 +1,4 @@
-import { resolveAccess } from './access.js';
+import { effectiveFeatures, resolveAccess } from './access.js';
 
 const day = 24 * 60 * 60 * 1000;
 const now = new Date('2026-10-20T12:00:00Z');

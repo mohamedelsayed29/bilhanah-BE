@@ -43,3 +43,8 @@ export function resolveAccess(
 export function hasAccess(access: RestaurantAccess): boolean {
   return access.status === 'TRIAL' || access.status === 'PAID';
 }
+
+/** What the restaurant may use right now: its plan's features while it has access, none otherwise. */
+export function effectiveFeatures(access: RestaurantAccess): PlanFeatures {
+  return hasAccess(access) ? access.features : NO_FEATURES;
+}

@@ -3,7 +3,8 @@ import type { BranchItemOverride } from '@bilhanah/contracts';
 // How a branch's overrides change the shared menu. Pure, so the owner's branch
 // menu, the public menu and order pricing all agree (and it is unit-tested).
 
-export type ItemOverrideRow = { itemId: string; isAvailable: boolean | null; isHidden: boolean };
+/** soldOutByInventory: the sold-out mark was set by inventory (auto sold-out), not by hand. */
+export type ItemOverrideRow = { itemId: string; isAvailable: boolean | null; isHidden: boolean; soldOutByInventory?: boolean };
 export type PriceOverrideRow = { variantId: string; pricePiastres: number };
 
 export type BranchOverrides = {
@@ -31,7 +32,7 @@ export function itemOverride(item: SharedItem, overrides: BranchOverrides): Bran
     const price = overrides.prices.get(variant.id);
     if (price !== undefined) prices[variant.id] = price;
   }
-  return { available: row?.isAvailable ?? null, hidden: row?.isHidden ?? false, prices };
+  return { available: row?.isAvailable ?? null, hidden: row?.isHidden ?? false, soldOutByInventory: row?.soldOutByInventory ?? false, prices };
 }
 
 /**

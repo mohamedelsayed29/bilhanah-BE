@@ -116,7 +116,7 @@ export const ROLE_PERMISSIONS: Record<RestaurantRole, readonly Permission[]> = {
   MANAGER,
   CASHIER: ['dashboard.view', 'menu.view', 'orders.view', 'orders.complete', 'tables.view', 'payments.view', 'payments.process', 'cash.operate'],
   WAITER: ['menu.view', 'orders.view', 'orders.create', 'tables.view', 'reservations.view', 'reservations.manage', 'service.view', 'service.manage'],
-  KITCHEN: ['kitchen.view', 'menu.availability', 'orders.view', 'orders.update', 'orders.complete', 'orders.cancel'],
+  KITCHEN: ['kitchen.view', 'menu.availability', 'orders.view', 'orders.update', 'orders.complete', 'orders.cancel', 'inventory.view', 'inventory.waste'],
 };
 
 /** The extra permissions each staff role may be granted, on top of its defaults. */

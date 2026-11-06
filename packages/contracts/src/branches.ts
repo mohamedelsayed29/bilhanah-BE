@@ -162,6 +162,8 @@ export type BranchItemOverride = {
 
 /** A shared dish with this branch's override and the result diners see. */
 export type BranchMenuItem = OwnerMenuItem & {
+  /** The sold-out mark was set by inventory (an ingredient ran out); restocking lifts it. Any manual change replaces it. */
+  soldOutByInventory: boolean;
   override: BranchItemOverride;
   effective: { available: boolean; visible: boolean; variants: MenuVariant[] };
 };

@@ -15,7 +15,7 @@ const item = {
 describe('branch menu overrides', () => {
   it('follows the shared menu without overrides', () => {
     expect(effectiveItem(item, NO_OVERRIDES)).toEqual({ visible: true, available: true, variants: item.variants });
-    expect(itemOverride(item, NO_OVERRIDES)).toEqual({ available: null, hidden: false, prices: {} });
+    expect(itemOverride(item, NO_OVERRIDES)).toEqual({ available: null, hidden: false, soldOutByInventory: false, prices: {} });
   });
 
   it('applies own prices to the sizes that have one', () => {
@@ -31,6 +31,12 @@ describe('branch menu overrides', () => {
     const backInStock = toOverrides([{ itemId: 'item-1', isAvailable: true, isHidden: false }], []);
     expect(effectiveItem({ ...item, isAvailable: false }, backInStock).available).toBe(true);
     expect(effectiveItem({ ...item, isAvailable: false }, NO_OVERRIDES).available).toBe(false);
+  });
+
+  it('reports a sold-out mark set by inventory', () => {
+    const byInventory = toOverrides([{ itemId: 'item-1', isAvailable: false, isHidden: false, soldOutByInventory: true }], []);
+    expect(itemOverride(item, byInventory)).toMatchObject({ available: false, soldOutByInventory: true });
+    expect(effectiveItem(item, byInventory).available).toBe(false);
   });
 
   it('hidden anywhere means not visible', () => {

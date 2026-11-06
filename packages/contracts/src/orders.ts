@@ -36,6 +36,8 @@ export const ORDER_ERROR_CODES = {
   TABLE_NOT_FOUND: 'TABLE_NOT_FOUND',
   /** details.menuItemIds lists the dishes that are sold out, hidden or gone. */
   ITEMS_UNAVAILABLE: 'ITEMS_UNAVAILABLE',
+  /** 409: the branch's stock cannot cover these dishes' recipes (inventory BLOCK_ORDERS policy). details: { menuItemIds } */
+  INSUFFICIENT_STOCK: 'INSUFFICIENT_STOCK',
   ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
   /** details: { from, to, allowed } */
   INVALID_STATUS_CHANGE: 'INVALID_STATUS_CHANGE',
@@ -216,6 +218,8 @@ export type OwnerOrder = Omit<OrderCore, 'history'> & {
   priority: OrderPriority;
   /** How the bill was paid; null while unpaid. */
   paymentMethod: OrderPaymentMethod | null;
+  /** Inventory WARN policy: dishes the branch's stock could not cover when it was placed (empty: none). */
+  lowStockItemIds: string[];
 };
 
 /** An order as the diner sees it on the tracking page. */

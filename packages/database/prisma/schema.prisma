@@ -316,8 +316,11 @@ model BranchMenuItem {
   /// null follows the shared menu; false marks the dish sold out at this branch only.
   isAvailable Boolean? @map("is_available")
   /// The branch does not offer this dish at all.
-  isHidden    Boolean  @default(false) @map("is_hidden")
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  isHidden           Boolean  @default(false) @map("is_hidden")
+  /// The sold-out mark (isAvailable false) was set by inventory (auto sold-out), which may clear it
+  /// again on restock. Any manual availability change clears this flag, so inventory never undoes it.
+  soldOutByInventory Boolean  @default(false) @map("sold_out_by_inventory")
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   branch Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
   item   MenuItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
@@ -496,6 +499,10 @@ model Entitlement {
   @@map("entitlements")
 }
 
+  /// Its recipe (inventory): ingredient lines.
+  recipeLines   RecipeLine[]
+  orderItems    OrderItem[]
+  wasteLines    WasteLine[]
 /// Global defaults for new trials; a single row with id 1.
 model TrialSettings {
   id           Int      @id @default(1)
@@ -1056,6 +1063,10 @@ model OrderItem {
   /// The kitchen station it was routed to when placed (null: the default station); the name is a copy.
   stationId               String?                  @map("station_id") @db.Uuid
   stationName             String?                  @map("station_name") @db.VarChar(40)
+  /// Inventory WARN policy: dishes whose recipe the branch's stock could not cover when it was placed.
+  lowStockItemIds  String[]            @default([]) @map("low_stock_item_ids") @db.Uuid
+  /// When its recipes were deducted from stock (inventory deductOn reached); null until then.
+  stockDeductedAt  DateTime?           @map("stock_deducted_at") @db.Timestamptz(3)
   /// Preparation on the kitchen display, with when it reached each step.
   prepStatus              OrderItemStatus          @default(NEW) @map("prep_status")
   acceptedAt              DateTime?                @map("accepted_at") @db.Timestamptz(3)
@@ -1110,10 +1121,17 @@ enum KitchenStationKind {
   MAIN
   GRILL
   DRINKS
+  /// The size ordered, while it still exists (its recipe is what the line deducts).
+  variantId               String?                  @map("variant_id") @db.Uuid
+  /// What the line's ingredients cost (whole line, all its quantity), set when the order is accepted
+  /// and its stock deducted; null without a recipe or inventory.
+  costPiastres            Int?                     @map("cost_piastres")
   DESSERTS
   COLD
   BAKERY
   OTHER
+  variant            MenuItemVariant?    @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  stockMovements     StockMovement[]
 
   @@map("kitchen_station_kind")
 }

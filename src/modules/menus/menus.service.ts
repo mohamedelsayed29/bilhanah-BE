@@ -85,7 +85,7 @@ export class MenusService {
   /** A branch's overrides of this restaurant's menu. */
   async branchOverrides(branchId: string): Promise<BranchOverrides> {
     const [items, prices] = await Promise.all([
-      this.prisma.branchMenuItem.findMany({ where: { branchId }, select: { itemId: true, isAvailable: true, isHidden: true } }),
+      this.prisma.branchMenuItem.findMany({ where: { branchId }, select: { itemId: true, isAvailable: true, isHidden: true, soldOutByInventory: true } }),
       this.prisma.branchVariantPrice.findMany({ where: { branchId }, select: { variantId: true, pricePiastres: true } }),
     ]);
     return toOverrides(items, prices);

@@ -207,7 +207,7 @@ describe('diners and branches', () => {
 
     const branchMenu = await http().get(`/v1/branches/${nasrId}/menu`).set(auth(token)).expect(200);
     expect(branchMenu.body.categories[0].items[0]).toMatchObject({
-      override: { available: null, hidden: true, prices: { [dish.variant]: 4000 } },
+      override: { available: null, hidden: true, soldOutByInventory: false, prices: { [dish.variant]: 4000 } },
       effective: { visible: false, available: true },
     });
     const reset = await http().post(`/v1/branches/${nasrId}/menu/reset`).set(auth(token)).expect(200);
