@@ -17,7 +17,7 @@ async function fixture(email='owner@reports.test',subdomain='reports-demo') {
   const b=await t.prisma.branch.findFirstOrThrow({where:{restaurantId:r.id}});
   const c=await t.prisma.category.create({data:{restaurantId:r.id,nameAr:'رئيسي',nameEn:'Main',sortOrder:0}});
   const item=await t.prisma.menuItem.create({data:{restaurantId:r.id,categoryId:c.id,nameAr:'=صيغة ضارة',nameEn:'Koshary',sortOrder:0}});
-  const add=(number:number,status:'COMPLETED'|'CANCELLED'|'REJECTED'|'ACCEPTED',branchId=b.id,day='2026-11-01')=>t.prisma.order.create({data:{restaurantId:r.id,branchId,number,businessDay:new Date(day),status,type:'PICKUP',customerName:'Guest',subtotalPiastres:10000,idempotencyKey:randomUUID(),items:{create:[{menuItemId:item.id,nameAr:item.nameAr,nameEn:'Koshary',quantity:2,unitPricePiastres:5000,sortOrder:0}]}}});
+  const add=(number:number,status:'COMPLETED'|'CANCELLED'|'REJECTED'|'ACCEPTED',branchId=b.id,day='2026-11-01')=>t.prisma.order.create({data:{restaurantId:r.id,branchId,number,businessDay:new Date(day),status,type:'PICKUP',customerName:'Guest',subtotalPiastres:10000,totalPiastres:10000,idempotencyKey:randomUUID(),items:{create:[{menuItemId:item.id,nameAr:item.nameAr,nameEn:'Koshary',quantity:2,unitPricePiastres:5000,sortOrder:0}]}}});
   return {token,r,b,c,item,add};
 }
 const period='from=2026-11-01&to=2026-11-30';
@@ -66,7 +66,7 @@ describe('restaurant reports',()=>{
     for(const invalid of ['from=2026-02-30&to=2026-03-01','from=2026-11-30&to=2026-11-01','from=2024-01-01&to=2026-01-01']) await http().get(`/v1/reports?${invalid}`).set(auth(r.token)).expect(400);
     await http().get(`/v1/reports?${period}`).expect(401);
     // Complimentary lines are sold units too; cancelled kitchen lines are not.
-    await t.prisma.order.create({data:{restaurantId:r.r.id,branchId:r.b.id,number:5,businessDay:new Date('2026-11-01'),status:'COMPLETED',type:'PICKUP',customerName:'Guest',subtotalPiastres:35000,idempotencyKey:randomUUID(),items:{create:[
+    await t.prisma.order.create({data:{restaurantId:r.r.id,branchId:r.b.id,number:5,businessDay:new Date('2026-11-01'),status:'COMPLETED',type:'PICKUP',customerName:'Guest',subtotalPiastres:35000,totalPiastres:35000,idempotencyKey:randomUUID(),items:{create:[
       {menuItemId:r.item.id,nameAr:'هدية',quantity:3,unitPricePiastres:0,sortOrder:0},
       {menuItemId:r.item.id,nameAr:'ملغي',quantity:7,unitPricePiastres:5000,prepStatus:'CANCELLED',sortOrder:1},
     ]}}});

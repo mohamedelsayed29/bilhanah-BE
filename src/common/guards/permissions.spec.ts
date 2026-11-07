@@ -35,8 +35,9 @@ describe('restaurant permissions', () => {
   it('lets managers grant only what they hold', () => {
     const managerInventory = ['inventory.view', 'inventory.waste', 'inventory.operate', 'inventory.costs'];
     const managerReviews = ['reviews.view', 'reviews.respond', 'reviews.moderate'];
-    expect(grantablePermissions('CASHIER', effectivePermissions('MANAGER'))).toEqual(['cash.adjust', 'cash.view', 'support.use', ...managerInventory, ...managerReviews]);
-    expect(grantablePermissions('CASHIER', effectivePermissions('MANAGER', ['payments.refund']))).toEqual(['payments.refund', 'cash.adjust', 'cash.view', 'support.use', ...managerInventory, ...managerReviews]);
+    const managerLoyalty = ['loyalty.view', 'loyalty.adjust', 'pos.discount'];
+    expect(grantablePermissions('CASHIER', effectivePermissions('MANAGER'))).toEqual(['cash.adjust', 'cash.view', 'support.use', ...managerInventory, ...managerReviews, ...managerLoyalty]);
+    expect(grantablePermissions('CASHIER', effectivePermissions('MANAGER', ['payments.refund']))).toEqual(['payments.refund', 'cash.adjust', 'cash.view', 'support.use', ...managerInventory, ...managerReviews, ...managerLoyalty]);
   });
 
   it('lets the owner grant every inventory permission to every staff role, on top of the defaults', () => {

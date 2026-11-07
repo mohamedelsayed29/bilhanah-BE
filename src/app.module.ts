@@ -39,6 +39,8 @@ import { AttendanceModule } from './modules/attendance/attendance.module.js';
 import { CashModule } from './modules/cash/cash.module.js';
 import { InventoryModule } from './modules/inventory/inventory.module.js';
 import { ReviewsModule } from './modules/reviews/reviews.module.js';
+import { LoyaltyModule } from './modules/loyalty/loyalty.module.js';
+import { PosModule } from './modules/pos/pos.module.js';
 import { TableSessionsModule } from './modules/table-sessions/table-sessions.module.js';
 
 @Module({
@@ -75,6 +77,8 @@ import { TableSessionsModule } from './modules/table-sessions/table-sessions.mod
     CashModule,
     InventoryModule,
     ReviewsModule,
+    LoyaltyModule,
+    PosModule,
     TableSessionsModule,
     OrdersModule,
     KitchenModule,

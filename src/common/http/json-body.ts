@@ -37,7 +37,13 @@ export function bodyParserException(error: unknown): unknown {
  * parser's message and turns oversized bodies into 500s.
  */
 export function jsonBody(limit = '100kb'): RequestHandler {
-  const parse = express.json({ limit });
+  const parse = express.json({
+    limit,
+    // External POS webhooks are verified against the exact bytes they were signed over.
+    verify: (request, _response, buffer) => {
+      if (request.url?.startsWith('/v1/public/pos/webhooks/')) (request as typeof request & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);
+    },
+  });
   return (request, response, next) =>
     parse(request, response, (error?: unknown) => next(error && bodyParserException(error)));
 }

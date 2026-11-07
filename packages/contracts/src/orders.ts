@@ -7,6 +7,7 @@ import { isPushServiceEndpoint } from './push.js';
 import { ORDER_PREP_MINUTES, type OrderingSettings } from './restaurants.js';
 import { BRANCH_SLUG_PATTERN } from './branches.js';
 import { ORDER_PAYMENT_METHODS, type OrderPaymentMethod } from './cash.js';
+import type { OrderLoyalty } from './loyalty.js';
 
 export const ORDER_TYPES = ['DINE_IN', 'PICKUP'] as const;
 export type OrderType = (typeof ORDER_TYPES)[number];
@@ -94,6 +95,12 @@ export const orderLineSchema = z.strictObject({
   recommendation: orderLineRecommendationSchema.optional(),
 });
 
+/** The loyalty part of placing an order: the member card (signed pass) and the reward to apply. */
+export const orderLoyaltySchema = z.strictObject({
+  pass: z.string().trim().min(10).max(200).optional(),
+  rewardId: z.uuid().optional(),
+});
+
 /**
  * A diner's order. Dine-in needs the table (from its QR code, or typed in);
  * pickup needs a phone number so the restaurant can reach the customer.
@@ -109,8 +116,13 @@ export const placeOrderSchema = z
     customerPhone: customerPhoneSchema.optional(),
     note: optionalText(300),
     items: z.array(orderLineSchema).min(1).max(ORDER_LIMITS.lines),
+    /** Loyalty (docs/LOYALTY.md): the member card, and a reward to apply (needs the card). */
+    loyalty: orderLoyaltySchema.optional(),
   })
   .superRefine((order, context) => {
+    if (order.loyalty?.rewardId && !order.loyalty.pass) {
+      context.addIssue({ code: 'custom', path: ['loyalty', 'pass'], message: 'Rewards need your member card.' });
+    }
     if (order.type === 'DINE_IN' && !order.tableCode && !order.tableLabel) {
       context.addIssue({ code: 'custom', path: ['tableLabel'], message: 'Choose your table.' });
     }
@@ -196,6 +208,15 @@ type OrderCore = {
   customerName: string;
   status: OrderStatus;
   subtotalPiastres: number;
+  /** Taken off by a loyalty reward (0 without one). */
+  discountPiastres: number;
+  /** POS orders: service charge and tax (tax included in prices is shown, not added); 0 otherwise. */
+  serviceChargePiastres: number;
+  taxPiastres: number;
+  /** The bill: subtotal − discount + service charge (+ tax added on top). */
+  totalPiastres: number;
+  /** Points earned or spent; null when the order is not part of the loyalty program. */
+  loyalty: OrderLoyalty | null;
   note: string | null;
   items: OrderLine[];
   placedAt: string;
@@ -250,6 +271,10 @@ export type OwnerOrder = Omit<OrderCore, 'history'> & {
   paymentMethod: OrderPaymentMethod | null;
   /** Inventory WARN policy: dishes the branch's stock could not cover when it was placed (empty: none). */
   lowStockItemIds: string[];
+  /** Taken on the diner's menu or at the POS, and by whom (POS orders). */
+  channel: 'MENU' | 'POS';
+  createdByName: string | null;
+  discountReason: string | null;
 };
 
 /** An order as the diner sees it on the tracking page. */
@@ -259,7 +284,12 @@ export type PublicOrder = OrderCore & {
   branch: { slug: string; name: string; phone: string; city: string; address: string; mapUrl: string | null; isMain: boolean };
 };
 
-export type PlaceOrderResponse = { trackingToken: string; order: PublicOrder };
+export type PlaceOrderResponse = {
+  trackingToken: string;
+  order: PublicOrder;
+  /** A new member card, when this checkout created the diner's loyalty membership (kept by the browser). */
+  loyaltyPass?: string;
+};
 
 /** GET /v1/orders/tracking-stats: how diners follow their orders. */
 export const trackingStatsQuerySchema = z.object({

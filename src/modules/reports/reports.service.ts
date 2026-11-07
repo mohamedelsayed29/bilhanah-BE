@@ -48,14 +48,16 @@ export class ReportsService {
         i.quantity, i.prep_status::text AS prep_status,
         (i.unit_price_piastres::bigint*i.quantity) AS line_amount,
         CASE WHEN o.status NOT IN ('CANCELLED','REJECTED') AND i.prep_status!='CANCELLED' THEN i.unit_price_piastres::bigint*i.quantity ELSE 0 END AS gross,
-        LEAST(COALESCE(r.amount,0),o.subtotal_piastres)::numeric * (i.unit_price_piastres::numeric*i.quantity)/NULLIF(o.subtotal_piastres,0) AS refund
+        LEAST(COALESCE(r.amount,0),o.subtotal_piastres)::numeric * (i.unit_price_piastres::numeric*i.quantity)/NULLIF(o.subtotal_piastres,0) AS refund,
+        -- A loyalty reward's discount, spread over the lines by their share of the bill.
+        o.discount_piastres::numeric * (i.unit_price_piastres::numeric*i.quantity)/NULLIF(o.subtotal_piastres,0) AS discount
         FROM base_orders o JOIN order_items i ON i.order_id=o.id LEFT JOIN menu_items m ON m.id=i.menu_item_id
         LEFT JOIN categories c ON c.id=m.category_id LEFT JOIN refunds r ON r.order_id=o.id
         WHERE TRUE ${q.categoryId ? Prisma.sql`AND m.category_id=${q.categoryId}::uuid` : Prisma.empty}
         ${q.productId ? Prisma.sql`AND i.menu_item_id=${q.productId}::uuid` : Prisma.empty}),
-      facts AS (SELECT *, GREATEST(0,gross-CASE WHEN gross>0 THEN COALESCE(refund,0) ELSE 0 END) AS net FROM lines)`;
+      facts AS (SELECT *, GREATEST(0,gross-CASE WHEN gross>0 THEN COALESCE(refund,0)+COALESCE(discount,0) ELSE 0 END) AS net FROM lines)`;
     const sums = Prisma.sql`COUNT(DISTINCT oid) AS orders, COALESCE(SUM(gross),0) AS gross, COALESCE(SUM(net),0) AS net,
-      COALESCE(SUM(refund),0) AS refunds, COALESCE(SUM(CASE WHEN status NOT IN ('CANCELLED','REJECTED') AND prep_status!='CANCELLED' THEN quantity ELSE 0 END),0) AS units,
+      COALESCE(SUM(refund),0) AS refunds, COALESCE(SUM(CASE WHEN gross>0 THEN discount ELSE 0 END),0) AS discounts, COALESCE(SUM(CASE WHEN status NOT IN ('CANCELLED','REJECTED') AND prep_status!='CANCELLED' THEN quantity ELSE 0 END),0) AS units,
       COUNT(DISTINCT oid) FILTER(WHERE status IN ('CANCELLED','REJECTED')) AS cancelled,
       COUNT(DISTINCT oid) FILTER(WHERE status='COMPLETED') AS completed,
       COUNT(DISTINCT oid) FILTER(WHERE status IN ('PLACED','ACCEPTED','PREPARING','READY')) AS pending,
@@ -114,10 +116,10 @@ export class ReportsService {
     if (settings && settings.currency !== 'EGP') throw new BadRequestException({ code: 'REPORT_CURRENCY_UNSUPPORTED', message: 'Order prices are stored in EGP. Configure the cash currency as EGP before reporting.' });
     return { restaurant: { name: restaurant.name, timezone: restaurant.timezone, currency: settings?.currency ?? 'EGP', logoUrl: restaurant.logo ? this.storage.publicUrl(`${restaurant.logo.storageKey}/${restaurant.logo.variantWidths[0]}.webp`) : null },
       branch: where.branchId ? branchOptions.find(b => b.id===where.branchId)?.name ?? null : null, filters: { ...q, ...(where.branchId && { branchId: where.branchId }) }, generatedAt: new Date().toISOString(),
-      summary: { gross: totals.gross, net: totals.net, orders: totals.orders, completed: totals.completed, cancelled: totals.cancelled, pending: totals.pending, refundedOrders: totals.refundedOrders, refunds: totals.refunds, discounts: 0, average: totals.average },
+      summary: { gross: totals.gross, net: totals.net, orders: totals.orders, completed: totals.completed, cancelled: totals.cancelled, pending: totals.pending, refundedOrders: totals.refundedOrders, refunds: totals.refunds, discounts: Math.round(Number((raw[0]![0] as Record<string, unknown>).discounts ?? 0)), average: totals.average },
       days, branches, categories, payments, topProducts: products.slice(0,10), rows, total,
       options: { branches: branchOptions.map(b => ({ id:b.id,name:b.name })), categories: categoryOptions.map(c => ({id:c.id,name:c.nameAr,nameEn:c.nameEn})), products: productOptions.map(p=>({id:p.id,categoryId:p.categoryId,name:p.nameAr,nameEn:p.nameEn})) },
-      capabilities: { discounts: false, refunds: 'RECORDED_CASH_REVERSALS', currency: 'EGP' } };
+      capabilities: { discounts: true, refunds: 'RECORDED_CASH_REVERSALS', currency: 'EGP' } };
   }
 
   async logo(userId: string): Promise<string | null> {

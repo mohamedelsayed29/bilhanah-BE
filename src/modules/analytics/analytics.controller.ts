@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Header, HttpCode, HttpStatus, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
-import { type BranchComparison, type PlatformStats, recordVisitSchema, type RestaurantStats, statsQuerySchema, type TableAnalytics, tableAnalyticsQuerySchema } from '@bilhanah/contracts';
+import { overviewQuerySchema, type RestaurantOverview, type BranchComparison, type PlatformStats, recordVisitSchema, type RestaurantStats, statsQuerySchema, type TableAnalytics, tableAnalyticsQuerySchema } from '@bilhanah/contracts';
 import type { Request } from 'express';
 import type { z } from 'zod';
 import { type AuthContext, CurrentAuth } from '../../common/decorators/current-auth.decorator.js';
@@ -8,6 +8,7 @@ import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.
 import { RequireAnyPermission, RequirePermission, RequireRole, RolesGuard } from '../../common/guards/roles.guard.js';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
 import { StatsService } from './stats.service.js';
+import { OverviewService } from './overview.service.js';
 import { TableAnalyticsService } from './table-analytics.service.js';
 import { VisitsService } from './visits.service.js';
 
@@ -37,7 +38,16 @@ export class RestaurantStatsController {
   constructor(
     private readonly stats: StatsService,
     private readonly tables: TableAnalyticsService,
+    private readonly overviews: OverviewService,
   ) {}
+
+  /** The dashboard's home: figures against the previous period, sales over time, income, trending and sold-out dishes. */
+  @Get('overview')
+  @Header('Cache-Control', 'no-store')
+  @RateLimit({ name: 'stats:ip', limit: 120, windowSeconds: 60, by: 'ip' })
+  overview(@CurrentAuth() auth: AuthContext, @Query(new ZodValidationPipe(overviewQuerySchema)) query: z.output<typeof overviewQuerySchema>): Promise<RestaurantOverview> {
+    return this.overviews.get(auth.userId, query.period, query.branchId);
+  }
 
   /** The tables' use and revenue over a period, by table (and area). */
   @Get('tables')

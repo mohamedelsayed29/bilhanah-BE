@@ -23,5 +23,5 @@ export type ReportData = {
   days: (ReportRow & { date: string })[]; branches: ReportRow[]; categories: ReportRow[]; payments: ReportRow[]; topProducts: ReportRow[];
   rows: ReportRow[]; total: number;
   options: { branches: { id: string; name: string }[]; categories: { id: string; name: string; nameEn: string | null }[]; products: { id: string; categoryId: string; name: string; nameEn: string | null }[] };
-  capabilities: { discounts: false; refunds: 'RECORDED_CASH_REVERSALS'; currency: 'EGP' };
+  capabilities: { discounts: boolean; refunds: 'RECORDED_CASH_REVERSALS'; currency: 'EGP' };
 };

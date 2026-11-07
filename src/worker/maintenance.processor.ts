@@ -7,6 +7,8 @@ import { ExpiryRemindersService } from '../modules/billing/expiry-reminders.serv
 import { VisitsService } from '../modules/analytics/visits.service.js';
 import { MediaService } from '../modules/media/media.service.js';
 import { SupportAttachmentsService } from '../modules/support/tickets/support-attachments.service.js';
+import { expireDue } from '../modules/loyalty/loyalty-ledger.js';
+import { PrismaService } from '../infrastructure/database/prisma.service.js';
 import { MaintenanceService } from './maintenance.service.js';
 import { ShopMaintenanceService } from './shop-maintenance.service.js';
 
@@ -27,6 +29,7 @@ export class MaintenanceProcessor implements OnApplicationBootstrap, OnApplicati
     private readonly reminders: ExpiryRemindersService,
     private readonly shop: ShopMaintenanceService,
     private readonly visits: VisitsService,
+    private readonly prisma: PrismaService,
     private readonly config: ConfigService<Env, true>,
   ) {}
 
@@ -49,7 +52,9 @@ export class MaintenanceProcessor implements OnApplicationBootstrap, OnApplicati
         // Support screenshots never sent with a ticket or reply, likewise.
         const attachments = await this.supportAttachments.purgeUnlinked(new Date(Date.now() - 24 * HOUR_MS));
         const shop = await this.shop.run();
-        this.logger.log({ ...result, unusedImages: images, unlinkedSupportAttachments: attachments, ...shop }, 'Purged expired records');
+        // Loyalty balances past their inactivity expiry (docs/LOYALTY.md).
+        const loyaltyExpired = await expireDue(this.prisma);
+        this.logger.log({ ...result, unusedImages: images, unlinkedSupportAttachments: attachments, ...shop, loyaltyExpired }, 'Purged expired records');
         await this.reminders.sendDue();
         // Visit counters, Redis to Postgres.
         await this.visits.flush();

@@ -62,7 +62,7 @@ export class TableAnalyticsService {
       }),
       this.prisma.order.findMany({ where: { ...inPeriod, tableSessionId: null }, select: { tableId: true, placedAt: true, paidAt: true, businessDay: true } }),
       this.prisma.order.groupBy({ by: ['tableId'], where: inPeriod, _count: { _all: true } }),
-      this.prisma.order.groupBy({ by: ['tableId'], where: { ...inPeriod, paidAt: { not: null } }, _sum: { subtotalPiastres: true } }),
+      this.prisma.order.groupBy({ by: ['tableId'], where: { ...inPeriod, paidAt: { not: null } }, _sum: { subtotalPiastres: true, discountPiastres: true } }),
       this.prisma.tableDailyStat.groupBy({ by: ['tableId'], where: { tableId: { in: ids }, day: { gte: fromDay, lte: toDay } }, _sum: { scans: true } }),
       this.prisma.tableDailyStat.findFirst({ where: { restaurantId: scope.restaurant.id }, orderBy: { day: 'asc' }, select: { day: true } }),
     ]);
@@ -100,7 +100,7 @@ export class TableAnalyticsService {
         averageOccupancyMinutes: average(own.flatMap((seating) => (seating.minutes === null ? [] : [seating.minutes]))),
         turnoverRate: Math.round((own.length / days) * 100) / 100,
         orders: orderCounts.find((row) => row.tableId === table.id)?._count._all ?? 0,
-        revenuePiastres: financial ? (paid.find((row) => row.tableId === table.id)?._sum.subtotalPiastres ?? 0) : null,
+        revenuePiastres: financial ? ((sums) => (sums?.subtotalPiastres ?? 0) - (sums?.discountPiastres ?? 0))(paid.find((row) => row.tableId === table.id)?._sum) : null,
         scans: scans.find((row) => row.tableId === table.id)?._sum.scans ?? 0,
       };
     });

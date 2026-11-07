@@ -48,7 +48,7 @@ export class StatsService {
     const branchSql = branchId ? Prisma.sql`AND o.branch_id = ${branchId}::uuid` : Prisma.empty;
     const [visitRows, orderRows, typeRows, topItems, access] = await Promise.all([
       this.prisma.restaurantDailyStat.findMany({ where: { restaurantId: restaurant.id, day: { gte: from, lte: to } } }),
-      this.prisma.order.groupBy({ by: ['businessDay'], where: counted, _count: { _all: true }, _sum: { subtotalPiastres: true } }),
+      this.prisma.order.groupBy({ by: ['businessDay'], where: counted, _count: { _all: true }, _sum: { subtotalPiastres: true, discountPiastres: true } }),
       this.prisma.order.groupBy({ by: ['type'], where: counted, _count: { _all: true } }),
       this.prisma.$queryRaw<{ nameAr: string; nameEn: string | null; quantity: bigint; revenue: bigint }[]>`
         SELECT i.name_ar AS "nameAr", i.name_en AS "nameEn", SUM(i.quantity) AS quantity, SUM(i.quantity * i.unit_price_piastres) AS revenue
@@ -66,7 +66,7 @@ export class StatsService {
     const series = dates.map((date) => {
       const key = dayKey(date);
       const orders = ordersByDay.get(key);
-      return { date: key, visits: visitsByDay.get(key)?.visits ?? 0, orders: orders?._count._all ?? 0, revenuePiastres: money(orders?._sum.subtotalPiastres ?? 0) };
+      return { date: key, visits: visitsByDay.get(key)?.visits ?? 0, orders: orders?._count._all ?? 0, revenuePiastres: money((orders?._sum.subtotalPiastres ?? 0) - (orders?._sum.discountPiastres ?? 0)) };
     });
     const totals = series.reduce((sum, day) => ({ visits: sum.visits + day.visits, orders: sum.orders + day.orders, revenuePiastres: sum.revenuePiastres + day.revenuePiastres }), { visits: 0, orders: 0, revenuePiastres: 0 });
     return {
@@ -96,7 +96,7 @@ export class StatsService {
     const [branches, rows] = await Promise.all([
       this.scopes.visibleBranches(scope),
       this.prisma.$queryRaw<{ branchId: string; orders: bigint; revenue: bigint | null; dineIn: bigint; pickup: bigint; prepMinutes: number | null }[]>`
-        SELECT o.branch_id AS "branchId", COUNT(*) AS orders, SUM(o.subtotal_piastres) AS revenue,
+        SELECT o.branch_id AS "branchId", COUNT(*) AS orders, SUM(o.subtotal_piastres - o.discount_piastres) AS revenue,
           COUNT(*) FILTER (WHERE o.type = 'DINE_IN') AS "dineIn", COUNT(*) FILTER (WHERE o.type = 'PICKUP') AS pickup,
           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (o.ready_at - o.placed_at)) / 60)
             FILTER (WHERE o.ready_at IS NOT NULL) AS "prepMinutes"

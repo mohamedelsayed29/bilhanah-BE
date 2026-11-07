@@ -73,6 +73,7 @@ export async function createTestApp(): Promise<TestApp> {
       for (const [code, priceMonthlyPiastres] of [['MENU', 20000], ['ORDERS', 35000], ['ADVANCED', 50000]] as const) {
         await prisma.plan.update({ where: { code }, data: { priceMonthlyPiastres } });
       }
+      await prisma.posPlatformSettings.upsert({ where: { id: 1 }, create: { id: 1 }, update: { enabled: false, plans: ['ORDERS', 'ADVANCED'] } });
       await prisma.trialSettings.update({
         where: { id: 1 },
         data: { enabled: true, durationDays: 30, planCode: 'ADVANCED' },

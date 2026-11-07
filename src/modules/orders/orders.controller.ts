@@ -1,6 +1,8 @@
 import { Body, Controller, Delete, Get, Header, Headers, HttpCode, HttpStatus, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import {
   branchQuerySchema,
+  type LoyaltyQuote,
+  loyaltyQuoteSchema,
   idempotencyKeySchema,
   type OrderAlerts,
   orderIdParamSchema,
@@ -199,6 +201,15 @@ export class PublicOrdersController {
     // @Headers takes no pipes, so the header is validated here.
     const idempotencyKey = idempotencyKeyPipe.transform(rawIdempotencyKey) as string;
     return this.orders.place(subdomain, idempotencyKey, body);
+  }
+
+  /** Checkout preview with loyalty: the bill with a reward, and the points the order will earn. */
+  @Post('restaurants/:subdomain/orders/quote')
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  @RateLimit({ name: 'order-quote:ip', limit: 300, windowSeconds: 60, by: 'ip' })
+  quote(@Param('subdomain') subdomain: string, @Body(new ZodValidationPipe(loyaltyQuoteSchema)) body: z.output<typeof loyaltyQuoteSchema>): Promise<LoyaltyQuote> {
+    return this.orders.quote(subdomain, body);
   }
 
   @Get('orders/:token')

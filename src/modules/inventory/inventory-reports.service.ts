@@ -155,7 +155,7 @@ export class InventoryReportsService {
       this.prisma.order.groupBy({
         by: ['branchId'],
         where: { ...where, status: { notIn: ['REJECTED', 'CANCELLED'] }, businessDay: { gte: new Date(`${query.from}T00:00:00Z`), lte: new Date(`${query.to}T00:00:00Z`) } },
-        _sum: { subtotalPiastres: true },
+        _sum: { subtotalPiastres: true, discountPiastres: true },
       }),
       this.prisma.stockMovement.groupBy({
         by: ['branchId', 'type'],
@@ -171,7 +171,7 @@ export class InventoryReportsService {
         const type = group.type as StockMovementType;
         totals[type] = (totals[type] ?? ZERO).plus(group._sum.value ?? ZERO);
       }
-      const sales = revenue.filter((group) => includes(group.branchId)).reduce((sum, group) => sum + (group._sum.subtotalPiastres ?? 0), 0);
+      const sales = revenue.filter((group) => includes(group.branchId)).reduce((sum, group) => sum + (group._sum.subtotalPiastres ?? 0) - (group._sum.discountPiastres ?? 0), 0);
       return { branchId: branch?.id ?? null, branchName: branch?.name ?? null, ...foodCostFigures(sales, totals) };
     };
     return {

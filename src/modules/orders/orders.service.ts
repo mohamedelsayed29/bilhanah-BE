@@ -15,11 +15,15 @@ import {
   type OrderPriority,
   type updateOrderItemsStatusSchema,
   type OrderStatus,
+  type OrderType,
   type OpeningHours,
   type OrderTrackingStats,
   type OwnerOrder,
   type Paginated,
   type placeOrderSchema,
+  type LoyaltyQuote,
+  type PosOrderPayments,
+  type loyaltyQuoteSchema,
   type PlaceOrderResponse,
   type PublicOrder,
   RESTAURANT_ERROR_CODES,
@@ -42,12 +46,15 @@ import { liveSessionWhere, seatingTableId } from '../table-sessions/session-life
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { MediaService } from '../media/media.service.js';
 import { effectiveItem } from '../branches/branch-menu.js';
-import { BranchScopeService, branchNotFound } from '../branches/branch-scope.service.js';
+import { BranchScopeService, branchNotFound, type Scope } from '../branches/branch-scope.service.js';
 import { MenusService } from '../menus/menus.service.js';
 import { RecommendationsService } from '../recommendations/recommendations.service.js';
 import { KitchenStationsService } from '../kitchen-display/kitchen-stations.service.js';
 import { CashService } from '../cash/cash.service.js';
 import { InventoryOrdersService } from '../inventory/inventory-orders.service.js';
+import { LoyaltyCore } from '../loyalty/loyalty-core.service.js';
+import { OrderPaymentsLedger } from './order-payments.js';
+import { PosSyncService } from '../pos-sync/pos-sync.service.js';
 import { forwardSteps, itemCascade, itemTimestamps, orderTargetFromItems } from './order-items.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { hasAccess } from '../subscriptions/access.js';
@@ -63,12 +70,26 @@ const orderInclude = {
   statusEvents: { orderBy: { createdAt: 'asc' }, select: { status: true, createdAt: true, reason: true, actorName: true } },
   tableTransfers: { orderBy: { createdAt: 'asc' }, select: { fromTableLabel: true, toTableLabel: true, createdAt: true, actorName: true, reason: true } },
   _count: { select: { pushSubscriptions: true } },
+  loyaltyMember: { select: { id: true, passVersion: true, joinOrderId: true } },
 } satisfies Prisma.OrderInclude;
 
 type OrderRow = Prisma.OrderGetPayload<{ include: typeof orderInclude }>;
 
 /** Rejected and cancelled orders have no bill, so they never keep a table occupied. */
 const UNBILLED_STATUSES: OrderStatus[] = ['REJECTED', 'CANCELLED'];
+
+/** A staff (POS) order: lines, the table or branch, and who it is for. */
+export type StaffOrderInput = {
+  type: OrderType;
+  tableId?: string;
+  branchId?: string;
+  customerName?: string;
+  customerPhone?: string;
+  note?: string;
+  items: { menuItemId: string; variantId: string; quantity: number; note?: string }[];
+  deviceId?: string | null;
+};
+export type StaffBill = { discountPiastres: number; discountReason: string | null; serviceChargePiastres: number; taxPiastres: number; totalPiastres: number };
 
 /** A dish of a shared submission changed on another phone meanwhile; the order was not created. */
 export class SharedCartChanged extends Error {}
@@ -113,6 +134,9 @@ export class OrdersService {
     private readonly stations: KitchenStationsService,
     private readonly cash: CashService,
     private readonly inventory: InventoryOrdersService,
+    private readonly loyalty: LoyaltyCore,
+    private readonly ledger: OrderPaymentsLedger,
+    private readonly posSync: PosSyncService,
   ) {}
 
   // --- Diners --------------------------------------------------------------
@@ -176,6 +200,10 @@ export class OrdersService {
       : null);
     const subtotalPiastres = lines.reduce((sum, line) => sum + line.unitPricePiastres * line.quantity, 0);
     const day = businessDay(now, restaurant.timezone);
+    // Loyalty (docs/LOYALTY.md): who the order counts for, its reward and the points it will earn, checked here.
+    const loyalty = await this.loyalty.prepareCheckout(restaurant, {
+      type: input.type, phone: input.customerPhone ?? null, name: input.customerName, pass: input.loyalty?.pass, rewardId: input.loyalty?.rewardId, lines,
+    }, now);
 
     let order: OrderRow;
     try {
@@ -185,6 +213,7 @@ export class OrdersService {
           VALUES (${branch.id}::uuid, ${day}::date, 1)
           ON CONFLICT (branch_id, business_day) DO UPDATE SET last_number = order_counters.last_number + 1
           RETURNING last_number`;
+        const member = loyalty ? await this.loyalty.resolveMember(tx, loyalty) : null;
         const created = await tx.order.create({
           data: {
             restaurantId: restaurant.id,
@@ -198,8 +227,18 @@ export class OrdersService {
             customerPhone: input.customerPhone ?? null,
             note: input.note ?? null,
             subtotalPiastres,
+            totalPiastres: subtotalPiastres - (loyalty && member ? loyalty.discountPiastres : 0),
             idempotencyKey,
             placedAt: now,
+            ...(loyalty && member && {
+              loyaltyMemberId: member.id,
+              discountPiastres: loyalty.discountPiastres,
+              loyaltyRewardId: loyalty.reward?.id ?? null,
+              loyaltyRewardName: loyalty.reward?.name ?? null,
+              loyaltyPointsSpent: loyalty.reward?.pointsCost ?? 0,
+              loyaltySpentHeld: Boolean(loyalty.reward),
+              loyaltyPointsToEarn: loyalty.pointsToEarn,
+            }),
             tableSessionId: sessionId,
             lowStockItemIds: stock.policy === 'WARN' ? stock.short : [],
             items: { create: lines.map((line, sortOrder) => ({ ...line, sortOrder, guestId: shared?.guests[sortOrder]?.id ?? null, guestName: shared?.guests[sortOrder]?.name ?? null })) },
@@ -207,6 +246,7 @@ export class OrdersService {
           },
           include: orderInclude,
         });
+        if (loyalty && member) await this.loyalty.applyCheckout(tx, loyalty, member, created);
         if (shared) {
           // The dishes leave the shared cart with the order, or not at all: a dish another phone sent,
           // changed or removed meanwhile cancels this submission (nothing is ordered twice).
@@ -230,8 +270,118 @@ export class OrdersService {
       return this.placed(winner);
     }
 
+    // The membership this checkout created points at the order only after it was written.
+    if (order.loyaltyMemberId && !order.loyaltyMember?.joinOrderId) order = await this.prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: orderInclude });
     this.realtime.emitOrderCreated(restaurant.id, this.toOwnerOrder(order));
+    await this.posSync.orderEvent(restaurant.id, order.id, 'order.create');
     return this.placed(order);
+  }
+
+  /**
+   * What checkout shows before ordering (POST /v1/public/restaurants/:subdomain/orders/quote): the bill
+   * with the chosen reward, the points the order will earn, and which rewards the card can use.
+   * Priced exactly as placing would price it.
+   */
+  async quote(rawSubdomain: string, input: z.output<typeof loyaltyQuoteSchema>, now = new Date()): Promise<LoyaltyQuote> {
+    const restaurant = await this.prisma.restaurant.findUnique({ where: { subdomain: normalizeSubdomain(rawSubdomain) }, select: { id: true, status: true } });
+    if (!restaurant) throw restaurantNotFound();
+    let branchId: string | null = null;
+    if (input.tableCode) {
+      branchId = (await this.prisma.table.findFirst({ where: { publicCode: input.tableCode, restaurantId: restaurant.id, isActive: true }, select: { branchId: true } }))?.branchId ?? null;
+    }
+    const branch = await this.prisma.branch.findFirst({
+      where: { restaurantId: restaurant.id, isActive: true, ...(branchId ? { id: branchId } : input.branch ? { slug: input.branch } : { isMain: true }) },
+      select: { id: true },
+    });
+    if (!branch) throw branchNotFound();
+    const lines = await this.priceLines(restaurant.id, branch.id, input.items);
+    return this.loyalty.quote(restaurant, { type: input.type, pass: input.pass, rewardId: input.rewardId, lines }, now);
+  }
+
+  // --- Staff (POS) -----------------------------------------------------------------
+
+  /** The branch and table a staff order goes to: the table's branch, the requested one, or the caller's. */
+  private async staffTarget(scope: Scope, input: { type: OrderType; tableId?: string; branchId?: string }) {
+    let table: { id: string; label: string; branchId: string } | null = null;
+    if (input.type === 'DINE_IN' && input.tableId) {
+      table = await this.prisma.table.findFirst({ where: { id: input.tableId, restaurantId: scope.restaurant.id, isActive: true }, select: { id: true, label: true, branchId: true } });
+      if (!table) throw new NotFoundException({ code: ORDER_ERROR_CODES.TABLE_NOT_FOUND, message: 'Table not found.' });
+    }
+    const branch = await this.scopes.branch(scope, table?.branchId ?? input.branchId);
+    if (!branch.isActive) throw branchNotFound();
+    return { branch, table };
+  }
+
+  /** Prices a staff order exactly as placing it would, and works out its bill. Never writes. */
+  async staffQuote<T>(scope: Scope, input: StaffOrderInput, bill: (subtotalPiastres: number) => T): Promise<T> {
+    const { branch } = await this.staffTarget(scope, input);
+    const lines = await this.priceLines(scope.restaurant.id, branch.id, input.items as z.output<typeof placeOrderSchema>['items']);
+    return bill(lines.reduce((sum, line) => sum + line.unitPricePiastres * line.quantity, 0));
+  }
+
+  /**
+   * An order taken by staff at the POS (docs/POS.md): priced from the branch's menu like a diner's,
+   * accepted at once (it goes straight to the kitchen), on the table's open session, with the bill
+   * from `bill` (discount, service charge, tax). The same Idempotency-Key returns the same order.
+   */
+  async placeStaff(scope: Scope, idempotencyKey: string, input: StaffOrderInput, bill: (subtotalPiastres: number) => StaffBill, now = new Date()): Promise<OwnerOrder> {
+    const restaurantId = scope.restaurant.id;
+    const existing = await this.prisma.order.findUnique({ where: { restaurantId_idempotencyKey: { restaurantId, idempotencyKey } }, include: orderInclude });
+    if (existing) return this.toOwnerOrder(existing);
+    const { branch, table } = await this.staffTarget(scope, input);
+    const lines = await this.priceLines(restaurantId, branch.id, input.items as z.output<typeof placeOrderSchema>['items']);
+    const stock = await this.inventory.checkStock(scope.restaurant, branch.id, lines);
+    if (stock.short.length && stock.policy === 'BLOCK_ORDERS') {
+      throw new ConflictException({ code: ORDER_ERROR_CODES.INSUFFICIENT_STOCK, message: 'Some dishes are not available right now.', details: { menuItemIds: stock.short } });
+    }
+    const subtotalPiastres = lines.reduce((sum, line) => sum + line.unitPricePiastres * line.quantity, 0);
+    const totals = bill(subtotalPiastres);
+    const sessionId = table ? (await this.prisma.tableSession.findFirst({ where: { tableId: table.id, status: { not: 'CLOSED' } }, select: { id: true } }))?.id ?? null : null;
+    const actor = await this.prisma.user.findUnique({ where: { id: scope.userId }, select: { fullName: true } });
+    const actorName = actor?.fullName ?? null;
+    const prepMinutes = scope.restaurant.orderPrepMinutes;
+    const day = businessDay(now, scope.restaurant.timezone);
+    let order: OrderRow;
+    try {
+      order = await this.prisma.$transaction(async (tx) => {
+        const [counter] = await tx.$queryRaw<{ last_number: number }[]>`
+          INSERT INTO order_counters (branch_id, business_day, last_number)
+          VALUES (${branch.id}::uuid, ${day}::date, 1)
+          ON CONFLICT (branch_id, business_day) DO UPDATE SET last_number = order_counters.last_number + 1
+          RETURNING last_number`;
+        const created = await tx.order.create({
+          data: {
+            restaurantId, branchId: branch.id, number: counter!.last_number, businessDay: day, type: input.type,
+            tableId: table?.id ?? null, tableLabel: table?.label ?? null,
+            customerName: input.customerName?.trim() || (table ? table.label : 'Walk-in'), customerPhone: input.customerPhone ?? null, note: input.note ?? null,
+            status: 'ACCEPTED', acceptedAt: now, ...(prepMinutes && { estimatedReadyAt: new Date(now.getTime() + prepMinutes * 60_000) }),
+            subtotalPiastres, discountPiastres: totals.discountPiastres, discountReason: totals.discountReason, serviceChargePiastres: totals.serviceChargePiastres,
+            taxPiastres: totals.taxPiastres, totalPiastres: totals.totalPiastres,
+            channel: 'POS', createdById: scope.userId, createdByName: actorName, posDeviceId: input.deviceId ?? null,
+            idempotencyKey, placedAt: now, tableSessionId: sessionId, lowStockItemIds: stock.policy === 'WARN' ? stock.short : [],
+            items: { create: lines.map((line, sortOrder) => ({ ...line, sortOrder, prepStatus: 'ACCEPTED' as const, acceptedAt: now })) },
+            statusEvents: { create: [
+              { status: 'PLACED', createdAt: now, actorId: scope.userId, actorName },
+              { status: 'ACCEPTED', createdAt: now, actorId: scope.userId, actorName },
+            ] },
+          },
+          include: orderInclude,
+        });
+        await this.inventory.orderReached(tx, created.id, 'ACCEPTED');
+        return created;
+      });
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      const winner = await this.prisma.order.findUnique({ where: { restaurantId_idempotencyKey: { restaurantId, idempotencyKey } }, include: orderInclude });
+      if (!winner) throw error;
+      return this.toOwnerOrder(winner);
+    }
+    order = await this.prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: orderInclude });
+    const view = this.toOwnerOrder(order);
+    this.realtime.emitOrderCreated(restaurantId, view);
+    await this.posSync.orderEvent(restaurantId, order.id, 'order.create');
+    if (table) this.realtime.emitTableUpdated(restaurantId, { branchId: branch.id, tableId: table.id, status: 'OCCUPIED' });
+    return view;
   }
 
   async track(token: string): Promise<PublicOrder> {
@@ -379,6 +529,8 @@ export class OrdersService {
         // Stock follows too: reaching the deduction point deducts the recipes, cancelling puts back what was deducted.
         if (input.status === 'CANCELLED') await this.inventory.orderCancelled(tx, orderId);
         else await this.inventory.orderReached(tx, orderId, input.status);
+        // Points follow too: credited on completion, spent points returned on cancelling.
+        await this.loyalty.syncOrder(tx, orderId, { id: userId, name: actor?.fullName ?? null });
       }
       return result;
     });
@@ -394,6 +546,7 @@ export class OrdersService {
     const ownerView = this.toOwnerOrder(order);
     this.realtime.emitOrderUpdated(restaurantId, ownerView, this.toPublicOrder(order));
     await this.alerts.queueStatus(orderId, input.status);
+    if (closing) await this.posSync.orderEvent(restaurantId, orderId, 'order.cancel');
     return ownerView;
   }
 
@@ -472,6 +625,7 @@ export class OrdersService {
       if (input.status === 'CANCELLED') await this.inventory.itemsCancelled(tx, orderId, changes.map((change) => change.id));
       // Serving the last dishes completes the order: anything still waiting is served with it.
       if (previous === 'COMPLETED') await this.cascadeItems(tx, orderId, 'COMPLETED', { id: userId, name: actor?.fullName ?? null }, now);
+      if (path.length) await this.loyalty.syncOrder(tx, orderId, { id: userId, name: actor?.fullName ?? null });
       return path;
     });
 
@@ -505,7 +659,7 @@ export class OrdersService {
   }
 
   /** Moves the dishes along with an order's own status change, recording each move. */
-  private async cascadeItems(tx: Prisma.TransactionClient, orderId: string, status: OrderStatus, actor: { id: string; name: string | null }, now: Date): Promise<void> {
+  private async cascadeItems(tx: Prisma.TransactionClient, orderId: string, status: OrderStatus, actor: { id: string | null; name: string | null }, now: Date): Promise<void> {
     const cascade = itemCascade(status);
     if (!cascade) return;
     const items = await tx.orderItem.findMany({ where: { orderId, prepStatus: { in: cascade.from } }, select: { id: true, prepStatus: true } });
@@ -587,27 +741,38 @@ export class OrdersService {
     this.scopes.require(scope, paid ? 'payments.process' : 'payments.refund');
     const own = await this.scopes.branchWhere(scope);
     const restaurantId = own.restaurantId;
-    const current = await this.prisma.order.findFirst({
-      where: { id: orderId, ...own },
-      select: { status: true, paidAt: true, paymentMethod: true, branchId: true, subtotalPiastres: true },
-    });
+    const current = await this.prisma.order.findFirst({ where: { id: orderId, ...own }, select: { status: true, paidAt: true, paymentMethod: true } });
     if (!current) throw orderNotFound();
     if (paid && UNBILLED_STATUSES.includes(current.status)) {
       throw new ConflictException({ code: ORDER_ERROR_CODES.ORDER_NOT_PAYABLE, message: 'A rejected or cancelled order has nothing to pay.' });
     }
     if (paid === Boolean(current.paidAt)) return this.get(userId, orderId);
     const now = new Date();
+    const actor = { id: userId, name: (await this.prisma.user.findUnique({ where: { id: userId }, select: { fullName: true } }))?.fullName ?? null };
     const changed = await this.prisma.$transaction(async (tx) => {
-      const { count } = await tx.order.updateMany({
-        where: { id: orderId, paidAt: current.paidAt },
-        data: paid ? { paidAt: now, paymentMethod: method } : { paidAt: null, paymentMethod: null },
-      });
-      if (!count) return false;
-      if (paid && method === 'CASH') {
-        await this.cash.recordOrderCash(tx, { scope, branchId: current.branchId, orderId, kind: 'SALE', amountPiastres: current.subtotalPiastres, paidAt: now });
+      const order = await this.ledger.lock(tx, orderId);
+      if (paid === Boolean(order.paidAt)) return false;
+      if (paid) {
+        // The rest of the bill, as one payment (cash into the drawer).
+        const due = order.totalPiastres - (await this.ledger.paid(tx, orderId));
+        if (due > 0) await this.ledger.add(tx, order, { method, amountPiastres: due, actor, scope, idempotencyKey: `mark-paid:${orderId}:${now.getTime()}`, now });
+        else await this.ledger.settleIfPaid(tx, order, actor, now);
+        return true;
       }
-      if (!paid && current.paidAt && current.paymentMethod === 'CASH') {
-        await this.cash.recordOrderCash(tx, { scope, branchId: current.branchId, orderId, kind: 'REFUND', amountPiastres: current.subtotalPiastres, paidAt: current.paidAt });
+      const payments = await tx.orderPayment.findMany({ where: { orderId, status: { in: ['SUCCEEDED', 'PARTIALLY_REFUNDED'] } }, orderBy: { createdAt: 'asc' } });
+      if (!payments.length) {
+        // Paid before payments were recorded one by one: the whole bill comes back.
+        await tx.order.update({ where: { id: orderId }, data: { paidAt: null, paymentMethod: null, refundedAt: now } });
+        if (current.paymentMethod === 'CASH' && order.paidAt) {
+          await this.cash.recordOrderCash(tx, { scope, branchId: order.branchId, orderId, kind: 'REFUND', amountPiastres: order.totalPiastres, paidAt: order.paidAt });
+        }
+        await this.loyalty.syncOrder(tx, orderId, actor);
+        return true;
+      }
+      for (const [index, payment] of payments.entries()) {
+        await this.ledger.refund(tx, { ...order, paidAt: index === payments.length - 1 ? order.paidAt : null }, payment, {
+          amountPiastres: payment.amountPiastres - payment.refundedPiastres, reason: 'Marked unpaid', actor, scope, now: new Date(now.getTime() + index),
+        });
       }
       return true;
     });
@@ -616,6 +781,93 @@ export class OrdersService {
     if (changed) this.realtime.emitOrderUpdated(restaurantId, ownerView, this.toPublicOrder(order));
     if (changed && paid && order.type === 'DINE_IN' && order.tableId) await this.cleanIfFreed(restaurantId, order.tableId, now);
     return ownerView;
+  }
+
+  // --- Payments (docs/POS.md, task 3) ---------------------------------------------------
+
+  async payments(scope: Scope, orderId: string): Promise<PosOrderPayments> {
+    const order = await this.prisma.order.findFirst({ where: { id: orderId, ...(await this.scopes.branchWhere(scope)) }, select: { id: true, totalPiastres: true, paidAt: true } });
+    if (!order) throw orderNotFound();
+    return this.ledger.view(this.prisma, order);
+  }
+
+  /** A payment towards an order (staff, or an external POS when `scope` is null). The same key records it once. */
+  async recordPayment(
+    scope: Scope | null, restaurantId: string, orderId: string, idempotencyKey: string,
+    input: { method: OrderPaymentMethod; amountPiastres: number; tenderedPiastres?: number; reference?: string | null; failed?: boolean; failureReason?: string | null; deviceId?: string | null; integrationId?: string | null; actorName?: string | null },
+    now = new Date(),
+  ): Promise<PosOrderPayments> {
+    const where = scope ? { id: orderId, ...(await this.scopes.branchWhere(scope)) } : { id: orderId, restaurantId };
+    const found = await this.prisma.order.findFirst({ where, select: { id: true } });
+    if (!found) throw orderNotFound();
+    const existing = await this.prisma.orderPayment.findUnique({ where: { restaurantId_idempotencyKey: { restaurantId, idempotencyKey } }, select: { orderId: true } });
+    if (!existing) {
+      const actor = scope ? { id: scope.userId, name: (await this.prisma.user.findUnique({ where: { id: scope.userId }, select: { fullName: true } }))?.fullName ?? null } : { id: '', name: input.actorName ?? null };
+      let settled = false;
+      try {
+        settled = await this.prisma.$transaction(async (tx) => {
+          const order = await this.ledger.lock(tx, orderId);
+          return (await this.ledger.add(tx, order, { ...input, actor: scope ? actor : null, scope, idempotencyKey, now })).settled;
+        });
+      } catch (error) {
+        if (!isUniqueViolation(error)) throw error;
+      }
+      await this.paymentChanged(restaurantId, orderId, settled, now);
+    }
+    const order = await this.prisma.order.findUniqueOrThrow({ where: { id: orderId }, select: { id: true, totalPiastres: true, paidAt: true } });
+    return this.ledger.view(this.prisma, order);
+  }
+
+  async refundPayment(scope: Scope, paymentId: string, input: { amountPiastres: number; reason: string }, now = new Date()): Promise<PosOrderPayments> {
+    const own = await this.scopes.branchWhere(scope);
+    const payment = await this.prisma.orderPayment.findFirst({ where: { id: paymentId, restaurantId: own.restaurantId, ...(own.branchId && { branchId: own.branchId }) } });
+    if (!payment) throw orderNotFound();
+    const actor = { id: scope.userId, name: (await this.prisma.user.findUnique({ where: { id: scope.userId }, select: { fullName: true } }))?.fullName ?? null };
+    await this.prisma.$transaction(async (tx) => {
+      const order = await this.ledger.lock(tx, payment.orderId);
+      await this.ledger.refund(tx, order, payment, { ...input, actor, scope, now });
+    });
+    await this.paymentChanged(own.restaurantId, payment.orderId, false, now);
+    const order = await this.prisma.order.findUniqueOrThrow({ where: { id: payment.orderId }, select: { id: true, totalPiastres: true, paidAt: true } });
+    return this.ledger.view(this.prisma, order);
+  }
+
+  private async paymentChanged(restaurantId: string, orderId: string, settled: boolean, now: Date) {
+    const order = await this.prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: orderInclude });
+    this.realtime.emitOrderUpdated(restaurantId, this.toOwnerOrder(order), this.toPublicOrder(order));
+    if (settled && order.type === 'DINE_IN' && order.tableId) await this.cleanIfFreed(restaurantId, order.tableId, now);
+  }
+
+  /**
+   * An external POS moved an order (its integration accepts status updates): forward along the order's
+   * path, or cancelled/rejected where allowed. Returns false when the move does not apply.
+   */
+  async applyExternalStatus(restaurantId: string, orderId: string, status: OrderStatus, actorName: string, now = new Date()): Promise<boolean> {
+    const order = await this.prisma.order.findFirst({ where: { id: orderId, restaurantId }, select: { status: true } });
+    if (!order || order.status === status) return false;
+    const closing = status === 'CANCELLED' || status === 'REJECTED';
+    const path = closing ? (ORDER_TRANSITIONS[order.status].includes(status) ? [status] : []) : forwardSteps(order.status, status);
+    if (!path.length) return false;
+    const moved = await this.prisma.$transaction(async (tx) => {
+      let previous = order.status;
+      for (const step of path) {
+        const timestamp = STATUS_TIMESTAMP[step];
+        const { count } = await tx.order.updateMany({ where: { id: orderId, status: previous }, data: { status: step, ...(timestamp && { [timestamp]: now }) } });
+        if (count !== 1) return false;
+        await tx.orderStatusEvent.create({ data: { orderId, status: step, actorName, createdAt: now } });
+        await this.cascadeItems(tx, orderId, step, { id: null, name: actorName }, now);
+        if (step === 'CANCELLED') await this.inventory.orderCancelled(tx, orderId);
+        else await this.inventory.orderReached(tx, orderId, step);
+        previous = step;
+      }
+      await this.loyalty.syncOrder(tx, orderId, null);
+      return true;
+    });
+    if (!moved) return false;
+    const full = await this.prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: orderInclude });
+    this.realtime.emitOrderUpdated(restaurantId, this.toOwnerOrder(full), this.toPublicOrder(full));
+    for (const step of path) await this.alerts.queueStatus(orderId, step);
+    return true;
   }
 
   /** Every active table and the unpaid orders keeping it occupied. */
@@ -632,7 +884,7 @@ export class OrdersService {
       this.prisma.order.findMany({
         where: this.openOnTableWhere(branch.id, now),
         orderBy: { placedAt: 'asc' },
-        select: { id: true, number: true, status: true, subtotalPiastres: true, placedAt: true, tableId: true, tableLabel: true },
+        select: { id: true, number: true, status: true, subtotalPiastres: true, totalPiastres: true, placedAt: true, tableId: true, tableLabel: true },
       }),
       // Bookings holding a table now: from TABLE_RESERVED_WINDOW.beforeMinutes before their time until afterMinutes after.
       this.prisma.reservation.findMany({
@@ -681,7 +933,7 @@ export class OrdersService {
           subtotalPiastres: order.subtotalPiastres,
           placedAt: order.placedAt.toISOString(),
         })),
-        unpaidPiastres: orders.reduce((sum, order) => sum + order.subtotalPiastres, 0),
+        unpaidPiastres: orders.reduce((sum, order) => sum + order.totalPiastres, 0),
         since: orders[0]?.placedAt.toISOString() ?? null,
         group: null,
       };
@@ -703,16 +955,18 @@ export class OrdersService {
       ...this.openOnTableWhere(table.branchId, now),
       OR: members.flatMap((member) => [{ tableId: member.id }, { tableId: null, tableLabel: member.label }]),
     };
-    const open = await this.prisma.order.findMany({ where, select: { id: true, subtotalPiastres: true } });
+    const open = await this.prisma.order.findMany({ where, select: { id: true } });
     const ids = open.map((order) => order.id);
     if (ids.length) {
+      const actor = { id: userId, name: (await this.prisma.user.findUnique({ where: { id: userId }, select: { fullName: true } }))?.fullName ?? null };
       await this.prisma.$transaction(async (tx) => {
-        for (const order of open) {
-          // Per order and conditional: an order paid meanwhile is neither re-marked nor counted again.
-          const { count } = await tx.order.updateMany({ where: { id: order.id, paidAt: null }, data: { paidAt: now, paymentMethod: method } });
-          if (count && method === 'CASH') {
-            await this.cash.recordOrderCash(tx, { scope, branchId: table.branchId, orderId: order.id, kind: 'SALE', amountPiastres: order.subtotalPiastres, paidAt: now });
-          }
+        for (const { id } of open) {
+          // Per order and locked: an order paid meanwhile is neither re-marked nor counted again.
+          const order = await this.ledger.lock(tx, id);
+          if (order.paidAt) continue;
+          const due = order.totalPiastres - (await this.ledger.paid(tx, id));
+          if (due > 0) await this.ledger.add(tx, order, { method, amountPiastres: due, actor, scope, idempotencyKey: `settle:${id}:${now.getTime()}`, now });
+          else await this.ledger.settleIfPaid(tx, order, actor, now);
         }
       });
       const orders = await this.prisma.order.findMany({ where: { id: { in: ids } }, include: orderInclude });
@@ -894,7 +1148,13 @@ export class OrdersService {
   }
 
   private placed(order: OrderRow): PlaceOrderResponse {
-    return { trackingToken: this.trackingTokens.issue(order.id), order: this.toPublicOrder(order) };
+    // The checkout that created a membership receives its card (a retry gets the same one back).
+    const joined = order.loyaltyMember && order.loyaltyMember.joinOrderId === order.id;
+    return {
+      trackingToken: this.trackingTokens.issue(order.id),
+      order: this.toPublicOrder(order),
+      ...(joined && { loyaltyPass: this.loyalty.passFor(order.loyaltyMember!) }),
+    };
   }
 
   private core(order: OrderRow) {
@@ -905,6 +1165,13 @@ export class OrdersService {
       customerName: order.customerName,
       status: order.status,
       subtotalPiastres: order.subtotalPiastres,
+      discountPiastres: order.discountPiastres,
+      serviceChargePiastres: order.serviceChargePiastres,
+      taxPiastres: order.taxPiastres,
+      totalPiastres: order.totalPiastres,
+      loyalty: order.loyaltyMemberId
+        ? { pointsToEarn: order.loyaltyPointsToEarn, earned: order.loyaltyEarned, pointsSpent: order.loyaltyPointsSpent, rewardName: order.loyaltyRewardName, discountPiastres: order.discountPiastres }
+        : null,
       note: order.note,
       items: order.items.map((item) => ({
         id: item.id,
@@ -947,6 +1214,9 @@ export class OrdersService {
       priority: order.priority,
       paymentMethod: order.paymentMethod,
       lowStockItemIds: order.lowStockItemIds,
+      channel: order.channel,
+      createdByName: order.createdByName,
+      discountReason: order.discountReason,
       ...this.core(order),
       history: order.statusEvents.map((event) => ({ status: event.status, at: event.createdAt.toISOString(), reason: event.reason, actorName: event.actorName })),
       transfers: order.tableTransfers.map((entry) => ({ fromTableLabel: entry.fromTableLabel, toTableLabel: entry.toTableLabel, at: entry.createdAt.toISOString(), actorName: entry.actorName, reason: entry.reason })),

@@ -97,6 +97,18 @@ export const PERMISSIONS = [
   'reviews.moderate',
   /** What diners are asked, what is published, and alerts. */
   'reviews.settings',
+  /** Loyalty members, their points and history, and the program's analytics. */
+  'loyalty.view',
+  /** Adding or removing a member's points (with a reason) and issuing a new member card. */
+  'loyalty.adjust',
+  /** The program: earning and redemption rules, rewards and tiers. */
+  'loyalty.settings',
+  /** The POS terminal: taking orders and payments at the counter (docs/POS.md). */
+  'pos.use',
+  /** Discounts above the cashier limit, and voiding POS orders. */
+  'pos.discount',
+  /** The POS: activation, settings, devices and integrations. */
+  'pos.settings',
   /** The support assistant and the restaurant's tickets with Bilhanah support. */
   'support.use',
 ] as const;
@@ -134,6 +146,8 @@ const MANAGER: Permission[] = [
   'cash.operate', 'cash.adjust', 'cash.view', 'cash.approve',
   'inventory.view', 'inventory.waste', 'inventory.operate', 'inventory.costs',
   'reviews.view', 'reviews.respond', 'reviews.moderate',
+  'loyalty.view', 'loyalty.adjust',
+  'pos.use', 'pos.discount',
   'support.use',
 ];
 
@@ -141,7 +155,7 @@ const MANAGER: Permission[] = [
 export const ROLE_PERMISSIONS: Record<RestaurantRole, readonly Permission[]> = {
   OWNER: PERMISSIONS,
   MANAGER,
-  CASHIER: ['dashboard.view', 'menu.view', 'orders.view', 'orders.complete', 'tables.view', 'tables.status', 'payments.view', 'payments.process', 'cash.operate'],
+  CASHIER: ['dashboard.view', 'menu.view', 'orders.view', 'orders.create', 'orders.complete', 'tables.view', 'tables.status', 'payments.view', 'payments.process', 'cash.operate', 'pos.use'],
   WAITER: ['menu.view', 'orders.view', 'orders.create', 'tables.view', 'tables.status', 'reservations.view', 'reservations.manage', 'service.view', 'service.manage'],
   KITCHEN: ['kitchen.view', 'menu.availability', 'orders.view', 'orders.update', 'orders.complete', 'orders.cancel', 'inventory.view', 'inventory.waste'],
 };
@@ -153,7 +167,13 @@ const INVENTORY_PERMISSIONS: Permission[] = ['inventory.view', 'inventory.waste'
 /** Likewise every reviews permission (a waiter who reads feedback, a cashier who replies...). */
 const REVIEW_PERMISSIONS: Permission[] = ['reviews.view', 'reviews.respond', 'reviews.moderate', 'reviews.settings'];
 
-const extra = (role: StaffRole) => [...INVENTORY_PERMISSIONS, ...REVIEW_PERMISSIONS].filter((permission) => !ROLE_PERMISSIONS[role].includes(permission));
+/** And every loyalty permission (a cashier who looks members up, a manager who runs the program...). */
+const LOYALTY_PERMISSIONS: Permission[] = ['loyalty.view', 'loyalty.adjust', 'loyalty.settings'];
+
+/** And the POS (a waiter who takes orders at the counter, a cashier who gives discounts...). */
+const POS_PERMISSIONS: Permission[] = ['pos.use', 'pos.discount', 'pos.settings'];
+
+const extra = (role: StaffRole) => [...INVENTORY_PERMISSIONS, ...REVIEW_PERMISSIONS, ...LOYALTY_PERMISSIONS, ...POS_PERMISSIONS].filter((permission) => !ROLE_PERMISSIONS[role].includes(permission));
 
 export const GRANTABLE_PERMISSIONS: Record<StaffRole, readonly Permission[]> = {
   MANAGER: ['payments.refund', 'attendance.manage', 'attendance.approve', 'cash.settings', ...extra('MANAGER')],
@@ -256,5 +276,11 @@ export const PERMISSION_LABELS: Record<Permission, [string, string]> = {
   'reviews.respond': ['يرد على التقييمات ويتابع الزباين', 'Reply to reviews and follow diners up'],
   'reviews.moderate': ['ينشر أو يخفي التقييمات', 'Publish and hide reviews'],
   'reviews.settings': ['إعدادات التقييمات', 'Review settings'],
+  'loyalty.view': ['يشوف أعضاء الولاء ونقاطهم', 'View loyalty members and points'],
+  'loyalty.adjust': ['يعدّل نقاط الأعضاء ويصدر كارت العضوية', 'Adjust points and issue member cards'],
+  'loyalty.settings': ['إعدادات برنامج الولاء والمكافآت', 'Loyalty rules and rewards'],
+  'pos.use': ['يستخدم الكاشير (POS)', 'Use the POS terminal'],
+  'pos.discount': ['خصومات أكبر وإلغاء طلبات الكاشير', 'Larger discounts and voiding POS orders'],
+  'pos.settings': ['إعدادات الكاشير والأجهزة والربط', 'POS settings, devices and integrations'],
   'support.use': ['الدعم الفني ومساعد بالهنا', 'Support assistant and tickets'],
 };

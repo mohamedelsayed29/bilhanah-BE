@@ -34,3 +34,5 @@ export * from './table-sessions.js';
 export * from './support.js';
 export * from './reports.js';
 export * from './services.js';
+export * from './loyalty.js';
+export * from './pos.js';

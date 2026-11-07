@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { STATS_PERIODS, VISIT_SOURCES } from './analytics.js';
+import { OVERVIEW_PERIODS, STATS_PERIODS, VISIT_SOURCES } from './analytics.js';
 
 /** POST /v1/public/restaurants/:subdomain/visits, sent once per page load by the menu. */
 export const recordVisitSchema = z.strictObject({ source: z.enum(VISIT_SOURCES).default('link') });
@@ -76,3 +76,8 @@ export type TableAnalytics = {
   /** Most used first (seatings, then orders, then revenue). */
   tables: TableAnalyticsRow[];
 };
+
+export const overviewQuerySchema = z.object({
+  period: z.enum(OVERVIEW_PERIODS).default('today'),
+  branchId: z.uuid().optional(),
+});

@@ -12,7 +12,10 @@ import { ExpiryRemindersService } from '../modules/billing/expiry-reminders.serv
 import { MediaService } from '../modules/media/media.service.js';
 import { SupportAttachmentsService } from '../modules/support/tickets/support-attachments.service.js';
 import { trackingTokensProvider } from '../modules/orders/tracking-token.js';
+import { CryptoModule } from '../common/crypto/crypto.module.js';
+import { PosSyncService } from '../modules/pos-sync/pos-sync.service.js';
 import { EmailProcessor } from './email.processor.js';
+import { PosSyncProcessor } from './pos-sync.processor.js';
 import { MaintenanceProcessor } from './maintenance.processor.js';
 import { MaintenanceService } from './maintenance.service.js';
 import { PushProcessor } from './push.processor.js';
@@ -20,7 +23,7 @@ import { ShopMaintenanceService } from './shop-maintenance.service.js';
 
 /** Background jobs. Runs as its own process (dist/worker.js) from the API image. */
 @Module({
-  imports: [AppConfigModule, AppLoggerModule, DatabaseModule, RedisModule, QueuesModule, StorageModule, EmailModule, PushModule],
+  imports: [AppConfigModule, AppLoggerModule, CryptoModule, DatabaseModule, RedisModule, QueuesModule, StorageModule, EmailModule, PushModule],
   providers: [
     EmailProcessor,
     PushProcessor,
@@ -32,6 +35,8 @@ import { ShopMaintenanceService } from './shop-maintenance.service.js';
     ShopMaintenanceService,
     VisitsService,
     MaintenanceProcessor,
+    PosSyncService,
+    PosSyncProcessor,
   ],
 })
 export class WorkerModule {}

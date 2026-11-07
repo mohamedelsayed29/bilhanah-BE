@@ -82,6 +82,8 @@ describe('restaurant services', () => {
     const blocked = await http().put('/v1/restaurants/mine/services/DIGITAL_MENU').set(auth(token)).send({ enabled: false }).expect(409);
     expect(blocked.body.error).toMatchObject({ code: 'SERVICE_DEPENDENTS', details: { dependents: ['QR_ORDERING', 'REVIEWS'] } });
 
+    // Loyalty earns on orders, so it goes before ordering.
+    await http().put('/v1/restaurants/mine/services/LOYALTY').set(auth(token)).send({ enabled: false }).expect(200);
     await http().put('/v1/restaurants/mine/services/QR_ORDERING').set(auth(token)).send({ enabled: false }).expect(200);
     await http().put('/v1/restaurants/mine/services/REVIEWS').set(auth(token)).send({ enabled: false }).expect(200);
     const off = (await http().put('/v1/restaurants/mine/services/DIGITAL_MENU').set(auth(token)).send({ enabled: false }).expect(200)).body;
@@ -104,7 +106,7 @@ describe('restaurant services', () => {
     await http().put('/v1/restaurants/mine/services/QR_ORDERING').set(auth(token)).send({ enabled: true }).expect(200);
     const audit = await t.prisma.auditLog.findMany({ where: { targetType: 'restaurant-service' }, orderBy: { createdAt: 'asc' } });
     expect(audit.map((row) => `${row.action}:${row.targetId}`)).toEqual([
-      'service.disabled:QR_ORDERING', 'service.disabled:REVIEWS', 'service.disabled:DIGITAL_MENU', 'service.enabled:DIGITAL_MENU', 'service.enabled:QR_ORDERING',
+      'service.disabled:LOYALTY', 'service.disabled:QR_ORDERING', 'service.disabled:REVIEWS', 'service.disabled:DIGITAL_MENU', 'service.enabled:DIGITAL_MENU', 'service.enabled:QR_ORDERING',
     ]);
     await http().put('/v1/restaurants/mine/services/NOPE').set(auth(token)).send({ enabled: true }).expect(400);
   });

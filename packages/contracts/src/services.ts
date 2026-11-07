@@ -9,7 +9,7 @@ import type { PlanFeatures } from './plans.js';
  * The core of the dashboard (profile, branches, team, reports and support) is always on.
  * A new service is one key here, one rule in SERVICE_RULES and one database enum value.
  */
-export const RESTAURANT_SERVICES = ['DIGITAL_MENU', 'QR_ORDERING', 'REVIEWS', 'INVENTORY', 'CASH_DRAWER', 'ATTENDANCE'] as const;
+export const RESTAURANT_SERVICES = ['DIGITAL_MENU', 'QR_ORDERING', 'REVIEWS', 'INVENTORY', 'CASH_DRAWER', 'ATTENDANCE', 'LOYALTY'] as const;
 export type RestaurantServiceKey = (typeof RESTAURANT_SERVICES)[number];
 
 /** Always part of the dashboard, whatever services are on. Shown for reference only. */
@@ -33,6 +33,8 @@ export const SERVICE_RULES: Record<RestaurantServiceKey, ServiceRule> = {
   INVENTORY: { requires: [], plan: 'inventory' },
   CASH_DRAWER: { requires: [], plan: null },
   ATTENDANCE: { requires: [], plan: null },
+  // Points are earned on orders placed on Bilhanah, so the program needs ordering.
+  LOYALTY: { requires: ['QR_ORDERING'], plan: 'ordering' },
 };
 
 /** Whether each service is on. Restaurants that never chose keep every service on (how Bilhanah worked before). */
@@ -150,6 +152,7 @@ export const SERVICE_LABELS: Record<RestaurantServiceKey | CoreServiceKey, [stri
   INVENTORY: ['المخزون والتكلفة', 'Inventory & costing'],
   CASH_DRAWER: ['الخزنة', 'Cash drawer'],
   ATTENDANCE: ['حضور الموظفين', 'Staff attendance'],
+  LOYALTY: ['برنامج الولاء والنقاط', 'Loyalty program'],
   PROFILE: ['بيانات المطعم', 'Restaurant profile'],
   BRANCHES: ['الفروع', 'Branches'],
   TEAM: ['الموظفين والصلاحيات', 'Team & permissions'],
