@@ -4,6 +4,9 @@ import { createTestApp, DASHBOARD_ORIGIN, signInAdmin, signUpOwner, type TestApp
 let t: TestApp;
 const http = () => request(t.app.getHttpServer());
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
+/** The registered device of the restaurant made by activePos(): terminal requests carry its key. */
+let deviceKey = '';
+const term = (token: string) => ({ ...auth(token), 'X-Pos-Device': deviceKey });
 
 const SETTINGS = {
   taxRateBps: 1400, taxInclusive: false, serviceChargeBps: 1200, serviceChargeDineInOnly: true, paymentMethods: ['CASH', 'CARD'],
@@ -88,18 +91,20 @@ async function activePos(settings: Partial<typeof SETTINGS> = {}) {
     const table = (await http().post('/v1/tables').set(auth(r.token)).send({ label: 'T1' }).expect(201)).body;
     await http().post('/v1/kitchen-accounts').set(auth(r.token)).send({ fullName: 'Cashier One', email: 'cashier@koshary.test', password: 'staff-password', role: 'CASHIER' }).expect(201);
     const cashier = (await http().post('/v1/auth/login').set('Origin', DASHBOARD_ORIGIN).send({ email: 'cashier@koshary.test', password: 'staff-password' }).expect(200)).body.accessToken as string;
-    return { ...r, admin, cashier, table, line: { menuItemId: koshary.id as string, variantId: koshary.variants[0].id as string, quantity: 2 } };
+    const branchId = (await http().get('/v1/branches').set(auth(r.token)).expect(200)).body.branches[0].id as string;
+    deviceKey = (await http().post('/v1/pos/devices').set(auth(r.token)).send({ name: 'Counter', branchId }).expect(201)).body.deviceKey as string;
+    return { ...r, admin, cashier, table, branchId, line: { menuItemId: koshary.id as string, variantId: koshary.variants[0].id as string, quantity: 2 } };
 }
 const order = (token: string, body: Record<string, unknown>, key = `pos-${Math.random().toString(36).slice(2, 12)}`) =>
-  http().post('/v1/pos/orders').set(auth(token)).set('Idempotency-Key', key).send(body);
+  http().post('/v1/pos/orders').set(term(token)).set('Idempotency-Key', key).send(body);
 const pay = (token: string, orderId: string, body: Record<string, unknown>, key = `pay-${Math.random().toString(36).slice(2, 12)}`) =>
-  http().post(`/v1/pos/orders/${orderId}/payments`).set(auth(token)).set('Idempotency-Key', key).send(body);
+  http().post(`/v1/pos/orders/${orderId}/payments`).set(term(token)).set('Idempotency-Key', key).send(body);
 
 describe('POS orders', () => {
   it('takes a dine-in order on a table with the server’s bill, straight to the kitchen', async () => {
     const pos = await activePos();
     // 100.00 subtotal, 12 % service = 12.00, 14 % tax on 112.00 added = 15.68 → 127.68.
-    const quote = (await http().post('/v1/pos/orders/quote').set(auth(pos.cashier)).send({ type: 'DINE_IN', tableId: pos.table.id, items: [pos.line] }).expect(200)).body;
+    const quote = (await http().post('/v1/pos/orders/quote').set(term(pos.cashier)).send({ type: 'DINE_IN', tableId: pos.table.id, items: [pos.line] }).expect(200)).body;
     expect(quote).toEqual({ subtotalPiastres: 10000, discountPiastres: 0, serviceChargePiastres: 1200, taxPiastres: 1568, totalPiastres: 12768, taxInclusive: false });
     const key = 'pos-dine-in-0001';
     const placed = (await order(pos.cashier, { type: 'DINE_IN', tableId: pos.table.id, items: [pos.line] }, key).expect(201)).body;
@@ -171,11 +176,11 @@ describe('POS payments, receipts and devices', () => {
 
     // A cashier may not refund; the owner refunds part of the card payment with a reason.
     const card = settled.payments.find((row: { method: string; status: string }) => row.method === 'CARD' && row.status === 'SUCCEEDED');
-    await http().post(`/v1/pos/payments/${card.id}/refunds`).set(auth(pos.cashier)).send({ amountPiastres: 1000, reason: 'Cold food' }).expect(403);
-    const refunded = (await http().post(`/v1/pos/payments/${card.id}/refunds`).set(auth(pos.token)).send({ amountPiastres: 1000, reason: 'Cold food' }).expect(201)).body;
+    await http().post(`/v1/pos/payments/${card.id}/refunds`).set(term(pos.cashier)).send({ amountPiastres: 1000, reason: 'Cold food' }).expect(403);
+    const refunded = (await http().post(`/v1/pos/payments/${card.id}/refunds`).set(term(pos.token)).send({ amountPiastres: 1000, reason: 'Cold food' }).expect(201)).body;
     expect(refunded).toMatchObject({ paidPiastres: 9000, duePiastres: 1000, settled: false });
     expect(refunded.payments.find((row: { id: string }) => row.id === card.id)).toMatchObject({ status: 'PARTIALLY_REFUNDED', refunds: [{ amountPiastres: 1000, reason: 'Cold food' }] });
-    await http().post(`/v1/pos/payments/${card.id}/refunds`).set(auth(pos.token)).send({ amountPiastres: 5000, reason: 'Too much' }).expect(409);
+    await http().post(`/v1/pos/payments/${card.id}/refunds`).set(term(pos.token)).send({ amountPiastres: 5000, reason: 'Too much' }).expect(409);
     expect(await t.prisma.auditLog.count({ where: { action: 'pos.payment.refunded' } })).toBe(1);
   });
 
@@ -184,11 +189,11 @@ describe('POS payments, receipts and devices', () => {
     const placed = (await order(pos.cashier, { type: 'PICKUP', items: [pos.line] }).expect(201)).body;
     expect((await pay(pos.cashier, placed.id, { method: 'CASH', amountPiastres: 10000 }).expect(409)).body.error.code).toBe('CASH_SHIFT_REQUIRED');
     await http().patch(`/v1/orders/${placed.id}/payment`).set(auth(pos.cashier)).send({ paid: true, method: 'CARD' }).expect(200);
-    const payments = (await http().get(`/v1/pos/orders/${placed.id}/payments`).set(auth(pos.cashier)).expect(200)).body;
+    const payments = (await http().get(`/v1/pos/orders/${placed.id}/payments`).set(term(pos.cashier)).expect(200)).body;
     expect(payments).toMatchObject({ settled: true, paidPiastres: 10000, payments: [{ method: 'CARD', amountPiastres: 10000 }] });
     // Unpaid again refunds it.
     await http().patch(`/v1/orders/${placed.id}/payment`).set(auth(pos.token)).send({ paid: false }).expect(200);
-    expect((await http().get(`/v1/pos/orders/${placed.id}/payments`).set(auth(pos.cashier)).expect(200)).body).toMatchObject({ settled: false, paidPiastres: 0, payments: [{ status: 'REFUNDED' }] });
+    expect((await http().get(`/v1/pos/orders/${placed.id}/payments`).set(term(pos.cashier)).expect(200)).body).toMatchObject({ settled: false, paidPiastres: 0, payments: [{ status: 'REFUNDED' }] });
   });
 
   it('prints receipts from the server, and registers, uses and revokes devices', async () => {
@@ -203,7 +208,7 @@ describe('POS payments, receipts and devices', () => {
     const devices = (await http().get('/v1/pos/devices').set(auth(pos.token)).expect(200)).body;
     expect(devices[0]).toMatchObject({ name: 'Front counter', status: 'ACTIVE', lastUserName: 'Cashier One' });
 
-    const receipt = (await http().get(`/v1/pos/orders/${placed.id}/receipt`).set(auth(pos.cashier)).expect(200)).body;
+    const receipt = (await http().get(`/v1/pos/orders/${placed.id}/receipt`).set(term(pos.cashier)).expect(200)).body;
     expect(receipt).toMatchObject({ header: 'Welcome', footer: 'Thank you', order: { number: placed.number, tableLabel: 'T1', cashierName: 'Cashier One', totalPiastres: 12768, taxPiastres: 1568 }, duePiastres: 12768 });
 
     await http().patch(`/v1/pos/devices/${registered.device.id}`).set(auth(pos.token)).send({ name: 'Bar' }).expect(200);

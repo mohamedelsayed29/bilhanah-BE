@@ -3,7 +3,7 @@ import {
   type AdminPosRestaurant, adminPosAccountSchema, adminPosRestaurantsQuerySchema, type Paginated, posActivateSchema, type PosOverview,
   type PosPlatformSettings, posPlatformSettingsSchema, posSettingsSchema, idempotencyKeySchema, type OwnerOrder, posOrderSchema, type PosTotals,
   type AdminPosHealth, type AuditEntry, type PosReport, posReportQuerySchema,
-  type PosDevice, type PosDeviceRegistration, posDeviceSchema, posDeviceUpdateSchema, type PosOrderPayments, posPaymentSchema, type PosReceipt, posRefundSchema,
+  type PosDevice, type PosDeviceRegistration, posDeviceSchema, posDeviceUpdateSchema, type PosPairing, posPairSchema, adminPosDeviceStatusSchema, type PosOrderPayments, posPaymentSchema, type PosReceipt, posRefundSchema,
 } from '@bilhanah/contracts';
 import { z } from 'zod';
 import { type AuthContext, CurrentAuth } from '../../common/decorators/current-auth.decorator.js';
@@ -11,6 +11,7 @@ import { AccessTokenGuard } from '../../common/guards/access-token.guard.js';
 import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
 import { RequireAnyPermission, RequirePermission, RequireRole, RolesGuard } from '../../common/guards/roles.guard.js';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
+import { PosAuthService } from './pos-auth.service.js';
 import { PosOrdersService } from './pos-orders.service.js';
 import { PosTerminalService } from './pos-terminal.service.js';
 import { PosReportsService } from './pos-reports.service.js';
@@ -29,6 +30,7 @@ export class PosController {
     private readonly orders: PosOrdersService,
     private readonly terminal: PosTerminalService,
     private readonly reports: PosReportsService,
+    private readonly posAuth: PosAuthService,
   ) {}
 
   /** POS sales: pos.settings or analytics.financial. */
@@ -43,8 +45,8 @@ export class PosController {
   @Get('orders/:id/payments')
   @RequirePermission('pos.use')
   @Header('Cache-Control', 'no-store')
-  payments(@CurrentAuth() auth: AuthContext, @Param('id', uuid) id: string): Promise<PosOrderPayments> {
-    return this.terminal.payments(auth.userId, id);
+  payments(@CurrentAuth() auth: AuthContext, @Param('id', uuid) id: string, @Headers('x-pos-device') device: string | undefined): Promise<PosOrderPayments> {
+    return this.terminal.payments(auth.userId, device, id);
   }
 
   /** A payment (part of the bill, or all of it); the same Idempotency-Key records it once. */
@@ -59,15 +61,15 @@ export class PosController {
   @Post('payments/:id/refunds')
   @RequirePermission('pos.use')
   @RateLimit(WRITE_LIMIT)
-  refund(@CurrentAuth() auth: AuthContext, @Param('id', uuid) id: string, @Body(new ZodValidationPipe(posRefundSchema)) body: z.output<typeof posRefundSchema>): Promise<PosOrderPayments> {
-    return this.terminal.refund(auth.userId, id, body);
+  refund(@CurrentAuth() auth: AuthContext, @Param('id', uuid) id: string, @Headers('x-pos-device') device: string | undefined, @Body(new ZodValidationPipe(posRefundSchema)) body: z.output<typeof posRefundSchema>): Promise<PosOrderPayments> {
+    return this.terminal.refund(auth.userId, device, id, body);
   }
 
   @Get('orders/:id/receipt')
   @RequirePermission('pos.use')
   @Header('Cache-Control', 'no-store')
-  receipt(@CurrentAuth() auth: AuthContext, @Param('id', uuid) id: string): Promise<PosReceipt> {
-    return this.terminal.receipt(auth.userId, id);
+  receipt(@CurrentAuth() auth: AuthContext, @Param('id', uuid) id: string, @Headers('x-pos-device') device: string | undefined): Promise<PosReceipt> {
+    return this.terminal.receipt(auth.userId, device, id);
   }
 
   // --- Devices -------------------------------------------------------------------------
@@ -94,6 +96,33 @@ export class PosController {
     return this.terminal.updateDevice(auth.userId, id, body);
   }
 
+  /** A one-time code to type on another device (the code is shown once). */
+  @Post('devices/:id/pairing')
+  @RequirePermission('pos.settings')
+  @Header('Cache-Control', 'no-store')
+  @RateLimit(WRITE_LIMIT)
+  pairing(@CurrentAuth() auth: AuthContext, @Param('id', uuid) id: string): Promise<PosPairing> {
+    return this.terminal.pairingCode(auth.userId, id);
+  }
+
+  /** Pairs this browser: the code becomes this device's key. */
+  @Post('devices/pair')
+  @RequirePermission('pos.use')
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  @RateLimit({ name: 'pos-pair:ip', limit: 10, windowSeconds: 15 * 60, by: 'ip' })
+  pair(@CurrentAuth() auth: AuthContext, @Body(new ZodValidationPipe(posPairSchema)) body: z.output<typeof posPairSchema>): Promise<PosDeviceRegistration> {
+    return this.terminal.pair(auth.userId, body.code);
+  }
+
+  /** Records that a cashier left the terminal (the session itself ends through /v1/auth/logout). */
+  @Post('session/end')
+  @RequirePermission('pos.use')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  endSession(@CurrentAuth() auth: AuthContext, @Headers('x-pos-device') device: string | undefined): Promise<void> {
+    return this.posAuth.recordLogout(auth.userId, device);
+  }
+
   @Delete('devices/:id')
   @RequirePermission('pos.settings')
   @RateLimit(WRITE_LIMIT)
@@ -106,8 +135,8 @@ export class PosController {
   @RequirePermission('pos.use')
   @HttpCode(HttpStatus.OK)
   @RateLimit({ name: 'pos-quote:ip', limit: 600, windowSeconds: 60, by: 'ip' })
-  quote(@CurrentAuth() auth: AuthContext, @Body(new ZodValidationPipe(posOrderSchema)) body: z.output<typeof posOrderSchema>): Promise<PosTotals> {
-    return this.orders.quote(auth.userId, body);
+  quote(@CurrentAuth() auth: AuthContext, @Headers('x-pos-device') device: string | undefined, @Body(new ZodValidationPipe(posOrderSchema)) body: z.output<typeof posOrderSchema>): Promise<PosTotals> {
+    return this.orders.quote(auth.userId, body, device);
   }
 
   /** An order taken at the counter; the same Idempotency-Key returns the same order. */
@@ -177,6 +206,18 @@ export class AdminPosController {
   @Header('Cache-Control', 'no-store')
   restaurants(@Query(new ZodValidationPipe(adminPosRestaurantsQuerySchema)) query: z.output<typeof adminPosRestaurantsQuerySchema>): Promise<Paginated<AdminPosRestaurant>> {
     return this.pos.restaurants(query);
+  }
+
+  @Get('restaurants/:id/devices')
+  @Header('Cache-Control', 'no-store')
+  devices(@Param('id', new ZodValidationPipe(z.uuid())) id: string): Promise<PosDevice[]> {
+    return this.pos.adminDevices(id);
+  }
+
+  @Patch('devices/:id/status')
+  @RateLimit(WRITE_LIMIT)
+  deviceStatus(@CurrentAuth() auth: AuthContext, @Param('id', new ZodValidationPipe(z.uuid())) id: string, @Body(new ZodValidationPipe(adminPosDeviceStatusSchema)) body: z.output<typeof adminPosDeviceStatusSchema>): Promise<PosDevice> {
+    return this.pos.adminDeviceStatus(auth.userId, id, body);
   }
 
   @Patch('restaurants/:id')

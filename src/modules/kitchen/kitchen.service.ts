@@ -191,6 +191,19 @@ export class KitchenService {
     });
   }
 
+  /** Sets (or, with null, removes) a staff account's POS PIN; a new PIN also clears a lockout. */
+  async setPin(actor: Actor, id: string, pin: string | null): Promise<KitchenAccount> {
+    const scope = await this.staffScope(actor.userId, 'staff.manage');
+    const target = await this.findManageable(scope, id);
+    const posPinHash = pin === null ? null : await this.passwords.hash(pin);
+    const user = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({ where: { id }, data: { posPinHash, posPinFailedAttempts: 0, posPinLockedUntil: null }, include: { staffBranch: { select: { name: true } } } });
+      await this.log(tx, scope, actor, 'staff.pin_changed', target, { pin: pin === null ? 'removed' : 'set' });
+      return updated;
+    });
+    return this.toAccount(user);
+  }
+
   async remove(actor: Actor, id: string): Promise<void> {
     const scope = await this.staffScope(actor.userId, 'staff.manage');
     const target = await this.findManageable(scope, id);
@@ -333,6 +346,8 @@ export class KitchenService {
       active: user.status === 'ACTIVE',
       createdAt: user.createdAt.toISOString(),
       lastSeenAt: lastSession?.lastUsedAt?.toISOString() ?? null,
+      hasPin: user.posPinHash !== null,
+      pinLockedUntil: user.posPinLockedUntil && user.posPinLockedUntil > new Date() ? user.posPinLockedUntil.toISOString() : null,
     };
   }
 }

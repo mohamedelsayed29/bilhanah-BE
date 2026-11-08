@@ -70,6 +70,9 @@ export type PosOverview = {
   setupCompletedAt: string | null;
   settings: PosSettings;
   updatedAt: string | null;
+  /** Devices allowed at once (set by the platform administrator), and how many are in use (ACTIVE or DISABLED). */
+  maxDevices: number;
+  devicesInUse: number;
 };
 
 // --- Administrators ------------------------------------------------------------------
@@ -100,12 +103,18 @@ export type AdminPosRestaurant = {
   allowedModes: PosMode[];
   mode: PosMode | null;
   activatedAt: string | null;
+  maxDevices: number;
+  devicesInUse: number;
 };
+
+export const POS_DEVICE_LIMITS = { min: 1, max: 100, default: 3 } as const;
 
 export const adminPosAccountSchema = z.strictObject({
   access: z.enum(POS_ACCESS),
   reason: z.string().trim().max(300).nullable().optional(),
   allowedModes: z.array(z.enum(POS_MODES)).min(1).max(POS_MODES.length),
+  /** Omitted: unchanged. */
+  maxDevices: z.number().int().min(POS_DEVICE_LIMITS.min).max(POS_DEVICE_LIMITS.max).optional(),
 });
 
 export const POS_STATUS_LABELS: Record<PosStatus, [string, string]> = {
@@ -247,9 +256,34 @@ export type PosOrderPayments = {
 
 export const POS_DEVICE_ERROR_CODES = {
   POS_DEVICE_NOT_FOUND: 'POS_DEVICE_NOT_FOUND',
-  /** The device key is unknown or the device was revoked (403). */
+  /** The device key is unknown or the device was revoked or paused (403). */
   POS_DEVICE_REVOKED: 'POS_DEVICE_REVOKED',
+  /** POS operations run only on a registered device: no X-Pos-Device key was sent (403). */
+  POS_DEVICE_REQUIRED: 'POS_DEVICE_REQUIRED',
+  /** The device belongs to another branch than the order or the cashier's branch (403). */
+  POS_DEVICE_WRONG_BRANCH: 'POS_DEVICE_WRONG_BRANCH',
+  /** The restaurant already has as many devices as its plan allows (409). */
+  POS_DEVICE_LIMIT: 'POS_DEVICE_LIMIT',
+  /** The pairing code is unknown, used or expired (400). */
+  POS_PAIRING_INVALID: 'POS_PAIRING_INVALID',
 } as const;
+
+/** PIN sign-in on a registered device (staff only). */
+export const POS_PIN_ERROR_CODES = {
+  /** Wrong PIN, or no PIN set for that person on this device's restaurant (401). */
+  POS_PIN_INVALID: 'POS_PIN_INVALID',
+  /** Too many wrong PINs: locked for a while (423); details.until. */
+  POS_PIN_LOCKED: 'POS_PIN_LOCKED',
+} as const;
+
+export const POS_PIN_POLICY = { length: { min: 4, max: 6 }, maxAttempts: 5, lockMinutes: 15, sessionHours: 12 } as const;
+const pinSchema = z.string().regex(/^\d{4,6}$/, 'Use 4 to 6 digits.');
+/** The owner or a manager sets a staff account's PIN; null removes it. */
+export const posPinSchema = z.strictObject({ pin: pinSchema.nullable() });
+export const posPinLoginSchema = z.strictObject({ userId: z.uuid(), pin: pinSchema });
+/** Who may sign in with a PIN on this device: staff of its branch (or all branches) holding pos.use, with a PIN set. */
+export type PosPinStaff = { id: string; fullName: string; role: string; locked: boolean };
+export type PosDeviceInfo = { id: string; name: string; branchId: string; branchName: string; restaurantName: string };
 
 export const POS_PAYMENT_ERROR_CODES = {
   /** More than is due, a method the POS does not take, or a closed order (409). */
@@ -262,15 +296,24 @@ export const POS_PAYMENT_ERROR_CODES = {
 
 // --- Devices (task 5) ------------------------------------------------------------------
 
-export const posDeviceSchema = z.strictObject({ name: z.string().trim().min(2).max(60), branchId: z.uuid() });
-export const posDeviceUpdateSchema = z.strictObject({ name: z.string().trim().min(2).max(60).optional(), branchId: z.uuid().optional() });
+/** onThisDevice: register the browser making the request (its key comes back); otherwise a pairing code for another device. */
+export const posDeviceSchema = z.strictObject({ name: z.string().trim().min(2).max(60), branchId: z.uuid(), onThisDevice: z.boolean().default(true) });
+export const posDeviceUpdateSchema = z.strictObject({ name: z.string().trim().min(2).max(60).optional(), branchId: z.uuid().optional(), status: z.enum(['ACTIVE', 'DISABLED']).optional() });
+export const posPairSchema = z.strictObject({ code: z.string().trim().toUpperCase().regex(/^[A-Z0-9]{8}$/, 'Use the 8-character code.') });
+export const POS_PAIRING_MINUTES = 30;
+/** A code to type on the new device, shown once; it expires after POS_PAIRING_MINUTES. */
+export type PosPairing = { device: PosDevice; code: string; expiresAt: string };
+/** Administrators: pause, resume or revoke a restaurant's device. */
+export const adminPosDeviceStatusSchema = z.strictObject({ status: z.enum(['ACTIVE', 'DISABLED', 'REVOKED']), reason: z.string().trim().max(300).nullable().optional() });
 
 export type PosDevice = {
   id: string;
   name: string;
   branchId: string;
   branchName: string;
-  status: 'ACTIVE' | 'REVOKED';
+  status: 'ACTIVE' | 'DISABLED' | 'REVOKED';
+  /** A pairing code is waiting to be typed on the device. */
+  pairingPending: boolean;
   lastSeenAt: string | null;
   lastUserName: string | null;
   createdAt: string;
@@ -278,7 +321,7 @@ export type PosDevice = {
 };
 
 /** The device key, shown once when the device is registered. */
-export type PosDeviceRegistration = { device: PosDevice; deviceKey: string };
+export type PosDeviceRegistration = { device: PosDevice; deviceKey: string | null; pairing: { code: string; expiresAt: string } | null };
 
 /** The receipt for an order: everything printed, from the server. */
 export type PosReceipt = {

@@ -71,6 +71,9 @@ export type KitchenAccount = {
   createdAt: string;
   /** The most recent use of any of its sessions. */
   lastSeenAt: string | null;
+  /** A POS PIN is set (quick sign-in on a registered device); lockedUntil while too many wrong PINs. */
+  hasPin: boolean;
+  pinLockedUntil: string | null;
 };
 
 /** What a kitchen screen needs to know about its restaurant. */
@@ -108,7 +111,7 @@ export type StaffOptions = {
 /** One change on the staff page, for the owner's log: who did what to whom. */
 export type StaffAuditEntry = {
   id: string;
-  action: 'staff.created' | 'staff.updated' | 'staff.role_changed' | 'staff.permissions_changed' | 'staff.activated' | 'staff.deactivated' | 'staff.password_reset' | 'staff.deleted';
+  action: 'staff.created' | 'staff.updated' | 'staff.role_changed' | 'staff.permissions_changed' | 'staff.activated' | 'staff.deactivated' | 'staff.password_reset' | 'staff.pin_changed' | 'staff.deleted';
   actorName: string | null;
   targetName: string | null;
   from: string | null;

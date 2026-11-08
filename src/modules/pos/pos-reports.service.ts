@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { localMidnight } from '../analytics/table-analytics.service.js';
 import { type AdminPosHealth, type AuditEntry, type OrderChannel, type OrderPaymentMethod, POS_STATUSES, type PosReport, type PosStatus, type posReportQuerySchema } from '@bilhanah/contracts';
 import { Prisma } from '@bilhanah/database';
 import type { z } from 'zod';
@@ -50,7 +51,7 @@ export class PosReportsService {
     const n = (value: bigint | null | undefined) => Number(value ?? 0);
     const collected = methods.reduce((sum, method) => sum + n(method.collected), 0);
     const shifts = await this.prisma.cashShift.findMany({
-      where: { restaurantId, ...(branchId && { branchId }), ...(query.cashierId && { cashierId: query.cashierId }), openedAt: { gte: new Date(`${query.from}T00:00:00Z`), lt: new Date(Date.parse(`${query.to}T00:00:00Z`) + 2 * 86_400_000) } },
+      where: { restaurantId, ...(branchId && { branchId }), ...(query.cashierId && { cashierId: query.cashierId }), openedAt: { gte: localMidnight(query.from, scope.restaurant.timezone), lt: localMidnight(nextDay(query.to), scope.restaurant.timezone) } },
       orderBy: { openedAt: 'desc' }, take: 50,
     });
     const net = n(row.gross) - n(row.discount);
@@ -106,4 +107,9 @@ export class PosReportsService {
       restaurant: row.restaurantId ? { id: row.restaurantId, name: names.get(row.restaurantId) ?? '—' } : null,
     }));
   }
+}
+
+/** The calendar day after `day` (YYYY-MM-DD). */
+function nextDay(day: string): string {
+  return new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
 }

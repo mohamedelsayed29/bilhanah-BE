@@ -32,6 +32,7 @@ describe('restaurant permissions', () => {
     expect(assignableRoles('CASHIER', effectivePermissions('CASHIER'))).toEqual([]);
   });
 
+
   it('lets managers grant only what they hold', () => {
     const managerInventory = ['inventory.view', 'inventory.waste', 'inventory.operate', 'inventory.costs'];
     const managerReviews = ['reviews.view', 'reviews.respond', 'reviews.moderate'];

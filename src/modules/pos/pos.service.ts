@@ -1,7 +1,7 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   type AdminPosRestaurant, type Paginated, type PlanCode, POS_ERROR_CODES, type PosMode, type PosOverview, type PosPlatformSettings, type PosSettings, type PosStatus,
-  type adminPosAccountSchema, type adminPosRestaurantsQuerySchema, type posPlatformSettingsSchema,
+  type adminPosAccountSchema, type adminPosRestaurantsQuerySchema, type posPlatformSettingsSchema, POS_DEVICE_ERROR_CODES, POS_DEVICE_LIMITS, type PosDevice, type adminPosDeviceStatusSchema,
 } from '@bilhanah/contracts';
 import type { PosAccount, Prisma, RestaurantStatus } from '@bilhanah/database';
 import type { z } from 'zod';
@@ -9,6 +9,7 @@ import { PrismaService } from '../../infrastructure/database/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { BranchScopeService } from '../branches/branch-scope.service.js';
 import { PosAccessService, posStatus, posUnavailable } from './pos-access.service.js';
+import { deviceView } from './pos-terminal.service.js';
 
 const modeAllowed = (mode: PosMode, allowed: PosMode[]) => (mode === 'BOTH' ? allowed.includes('BOTH') || (allowed.includes('BILHANAH') && allowed.includes('EXTERNAL')) : allowed.includes(mode) || allowed.includes('BOTH'));
 
@@ -100,25 +101,53 @@ export class PosService {
     await this.prisma.restaurant.findUniqueOrThrow({ where: { id: restaurantId }, select: { id: true } });
     await this.prisma.$transaction(async (tx) => {
       const before = await tx.posAccount.findUnique({ where: { restaurantId } });
-      const data = { access: input.access, accessReason: input.access === 'ENABLED' ? null : (input.reason ?? null), allowedModes: [...new Set(input.allowedModes)] };
+      const data = { access: input.access, accessReason: input.access === 'ENABLED' ? null : (input.reason ?? null), allowedModes: [...new Set(input.allowedModes)], ...(input.maxDevices !== undefined && { maxDevices: input.maxDevices }) };
       await tx.posAccount.upsert({ where: { restaurantId }, create: { restaurantId, ...data }, update: data });
       await this.audit.record({
         actorId: adminId, restaurantId, action: `pos.access.${input.access.toLowerCase()}`, targetType: 'pos',
-        metadata: { previous: before ? { access: before.access, allowedModes: before.allowedModes } : null, next: data },
+        metadata: { previous: before ? { access: before.access, allowedModes: before.allowedModes, maxDevices: before.maxDevices } : null, next: data },
       }, tx);
+      if (input.maxDevices !== undefined && before && before.maxDevices !== input.maxDevices) {
+        await this.audit.record({ actorId: adminId, restaurantId, action: 'pos.devices.limit_changed', targetType: 'pos', metadata: { previous: before.maxDevices, next: input.maxDevices } }, tx);
+      }
     });
     const restaurant = await this.prisma.restaurant.findUniqueOrThrow({ where: { id: restaurantId }, select: { id: true, name: true, subdomain: true, status: true, posAccount: true } });
     return this.row(await this.access.platform(), restaurant);
   }
 
+  /** A restaurant's devices, for administrators. */
+  async adminDevices(restaurantId: string): Promise<PosDevice[]> {
+    const rows = await this.prisma.posDevice.findMany({ where: { restaurantId }, include: { branch: { select: { name: true } } }, orderBy: [{ status: 'asc' }, { createdAt: 'desc' }] });
+    return rows.map(deviceView);
+  }
+
+  /** Administrators pause, resume or revoke any device; a revoked one never works again. */
+  async adminDeviceStatus(adminId: string, deviceId: string, input: z.output<typeof adminPosDeviceStatusSchema>): Promise<PosDevice> {
+    const device = await this.prisma.posDevice.findUnique({ where: { id: deviceId } });
+    if (!device) throw new NotFoundException({ code: POS_DEVICE_ERROR_CODES.POS_DEVICE_NOT_FOUND, message: 'Device not found.' });
+    if (device.status === 'REVOKED' && input.status !== 'REVOKED') throw new ConflictException({ code: POS_DEVICE_ERROR_CODES.POS_DEVICE_REVOKED, message: 'A revoked device cannot be switched back on.' });
+    const row = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.posDevice.update({
+        where: { id: deviceId },
+        data: input.status === 'REVOKED' ? { status: 'REVOKED', revokedAt: device.revokedAt ?? new Date(), pairingCodeHash: null, pairingExpiresAt: null } : { status: input.status },
+        include: { branch: { select: { name: true } } },
+      });
+      await this.audit.record({ actorId: adminId, restaurantId: device.restaurantId, action: `pos.device.admin_${input.status.toLowerCase()}`, targetType: 'pos-device', targetId: deviceId, metadata: { previous: device.status, reason: input.reason ?? null } }, tx);
+      return updated;
+    });
+    return deviceView(row);
+  }
+
   private async row(platform: { enabled: boolean; plans: PlanCode[] }, restaurant: { id: string; name: string; subdomain: string; status: RestaurantStatus; posAccount: PosAccount | null }): Promise<AdminPosRestaurant> {
     const planCode = await this.access.planCode(restaurant);
+    const devicesInUse = await this.prisma.posDevice.count({ where: { restaurantId: restaurant.id, status: { in: ['ACTIVE', 'DISABLED'] } } });
     const { status, disabledReason } = posStatus(platform, planCode, restaurant.posAccount);
     const account = restaurant.posAccount;
     return {
       id: restaurant.id, name: restaurant.name, subdomain: restaurant.subdomain, planCode, status, disabledReason,
       access: account?.access ?? 'ENABLED', accessReason: account?.accessReason ?? null, allowedModes: account?.allowedModes ?? ['BILHANAH', 'EXTERNAL'],
       mode: account?.mode ?? null, activatedAt: account?.activatedAt?.toISOString() ?? null,
+      maxDevices: account?.maxDevices ?? POS_DEVICE_LIMITS.default, devicesInUse,
     };
   }
 }

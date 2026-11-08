@@ -1,8 +1,9 @@
-import { Body, Controller, Delete, Get, Header, HttpCode, HttpStatus, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, HttpCode, HttpStatus, Param, Patch, Post, Put, Req, UseGuards } from '@nestjs/common';
 import {
   createKitchenAccountSchema,
   type KitchenAccount,
   type KitchenContext,
+  posPinSchema,
   setKitchenPasswordSchema,
   type StaffAuditEntry,
   type StaffOptions,
@@ -89,6 +90,17 @@ export class KitchenAccountsController {
     @Body(new ZodValidationPipe(setKitchenPasswordSchema)) body: z.output<typeof setKitchenPasswordSchema>,
   ): Promise<void> {
     await this.kitchen.setPassword(actor(auth, request), id, body.password);
+  }
+
+  @Put(':id/pin')
+  @RateLimit(WRITE_LIMIT)
+  setPin(
+    @CurrentAuth() auth: AuthContext,
+    @Req() request: Request,
+    @Param('id', idParam) id: string,
+    @Body(new ZodValidationPipe(posPinSchema)) body: z.output<typeof posPinSchema>,
+  ): Promise<KitchenAccount> {
+    return this.kitchen.setPin(actor(auth, request), id, body.pin);
   }
 
   @Delete(':id')

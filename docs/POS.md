@@ -110,10 +110,34 @@ The terminal reads the menu and tables through the existing endpoints:
 
 ## Devices and receipts (task 5)
 
-- **Registering.** `pos_devices` stores the sha256 of a device key. The key is shown once and kept by that browser.
-- **Using a device.** Requests carrying `X-Pos-Device` record the device on the order or payment. A revoked or foreign key gets 403 `POS_DEVICE_REVOKED`.
+- **Registering.** `pos_devices` stores the sha256 of a device key. Registered "on this device", the key is returned once and kept by that browser. For another device, a one-time 8-character pairing code (stored hashed, valid 30 minutes) is returned instead; typed on the new device (`POST /v1/pos/devices/pair`, any account with `pos.use` at that restaurant and branch), it is exchanged for a fresh key.
+- **Required.** Every terminal operation (quote, order, payments, refunds, receipt) needs `X-Pos-Device`: none gets 403 `POS_DEVICE_REQUIRED`; unknown, foreign, paused or revoked gets 403 `POS_DEVICE_REVOKED`. The order or payment records the device, and the device's last use.
+- **Branch.** The device's branch is the terminal's: a branch-tied account on another branch's device, or an order or table of another branch, gets 403 `POS_DEVICE_WRONG_BRANCH`.
+- **Limit.** `pos_accounts.max_devices` (set by the platform administrator, default 3, 1–100) caps ACTIVE and DISABLED devices; registration is serialised per restaurant and refused with 409 `POS_DEVICE_LIMIT`. Revoked devices free a place.
+- **Status.** ACTIVE, DISABLED (paused; can resume) or REVOKED (final). The owner, a manager with `pos.settings`, or the administrator can change it.
 - **Receipts.** `GET /v1/pos/orders/:id/receipt` builds the receipt from the server. The dashboard prints it with the browser, laid out for 80 mm paper.
 - **Installing.** The dashboard has a web manifest, so it can be installed, with a shortcut straight to `/pos/terminal`.
+
+## Security model
+
+Four separate things decide whether a POS request runs, checked in this order on every request:
+
+1. **Account** (`AccessTokenGuard`, `BranchScopeService.resolve`): signed in, ACTIVE, staff of this restaurant (or its owner), and the branch it may work at. Nothing the client sends about restaurant, branch or role is trusted.
+2. **Entitlement** (`PosAccessService.requireActive`): an active, unexpired subscription whose plan the platform offers the POS with, administrator access ENABLED, and the owner's setup done. Otherwise 409 `POS_UNAVAILABLE` with the status.
+3. **Device** (`PosTerminalService.onDevice`): an ACTIVE registered device of this restaurant, at the account's branch.
+4. **Permission** (`RequirePermission` and the services): `pos.use`, plus `orders.create`, `payments.process`, `payments.refund`, `pos.discount` as each action needs. Cashiers get `pos.use`, `orders.create` and `payments.process` by default; refunds, discounts above the cashier limit, devices and settings are granted on purpose.
+
+POS is not a role: cashiers are CASHIER accounts (one per person), and any staff role may be granted `pos.use`.
+
+### PIN sign-in
+
+- The owner or a manager sets a staff account's 4–6 digit PIN (`PUT /v1/kitchen-accounts/:id/pin`; stored with the password hasher, never shown again; null removes it).
+- On a registered device, `GET /v1/pos/device` (device key only) lists who may sign in there: active staff of that restaurant and branch, holding `pos.use`, with a PIN. `POST /v1/pos/device/pin` signs in and starts a session that is not remembered (it ends with the browser session, at most a day).
+- Five wrong PINs lock that account's PIN for 15 minutes (423 `POS_PIN_LOCKED`, with `until`); a new PIN from the owner lifts it. Requests are also rate-limited per IP. Every attempt is audited without the PIN.
+
+### Audit
+
+Logged (never passwords, PINs, keys or tokens): `pos.login`, `pos.logout`, `pos.pin.failed`, `pos.pin.locked`, `pos.pin.rejected`; `pos.device.registered`, `paired`, `pairing_issued`, `disabled`, `enabled`, `revoked`, `admin_*`; `pos.order.created` (with any discount), `pos.payment.recorded`, `pos.payment.refunded`; cash shifts (`cash.*`); staff and permission changes (staff log, including `staff.pin_changed`); `pos.access.*`, `pos.devices.limit_changed`, `pos.platform.updated`.
 
 ## External integrations (task 6)
 
@@ -192,6 +216,7 @@ For administrators:
    - `20261121000000_pos_activation`
    - `20261122000000_pos_orders`
    - `20261123000000_pos_operations`
+   - `20261124000000_pos_security` (device limit, paused devices, pairing codes, staff PINs)
 2. Restart the API and the worker. The worker runs `pos-sync` on BullMQ, using the existing Redis.
 3. Set `API_PUBLIC_URL`: webhook URLs are built from it.
 4. Set `DATA_ENCRYPTION_KEY`, recommended so that rotating the JWT secret does not lose the integration secrets.
@@ -203,4 +228,5 @@ For administrators:
 - **Offline.** There is no offline mode. The terminal shows when it is offline and sends nothing until it is back online.
 - **Menu sync from a POS.** This needs a provider with a menu API.
 - **Card payments.** They are recorded as taken by the restaurant's own card machine (method `CARD`, with its approval code). The POS does not talk to a card reader.
+- **PIN sessions** last at most a day and end with the browser session; there is no idle timeout on the terminal yet.
 - Printing is browser printing. Direct thermal (ESC/POS) printing needs a local bridge and is not built.

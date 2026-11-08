@@ -110,7 +110,8 @@ describe('cashier shifts', () => {
     // The cashier sees their own history; the report counts the shift.
     const mine = await http().get('/v1/cash/shifts').set(auth(cashier.token)).expect(200);
     expect(mine.body.total).toBe(1);
-    const today = new Date().toISOString().slice(0, 10);
+    // The restaurant's day (Africa/Cairo), not UTC's: they differ for two hours after midnight.
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
     const report = await http().get(`/v1/cash/report?from=${today}&to=${today}`).set(auth(r.token)).expect(200);
     expect(report.body.totals).toMatchObject({ shifts: 1, closedShifts: 1, discrepancyShifts: 0, completionRate: 1 });
     expect(report.body.byCashier[0]).toMatchObject({ id: cashier.id, cashSalesPiastres: 10_500 });

@@ -6,6 +6,7 @@
 //
 // Owner: demo-owner@bilhanah.local / demo-password-1 · Restaurant: koshary-demo
 // Kitchen screen: demo-kitchen@bilhanah.local / demo-kitchen-1
+// Cashier PIN on a registered POS device (/pos-login): 1234
 // Development only: confirms the account through Mailpit.
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -20,6 +21,7 @@ const KITCHEN_EMAIL = 'demo-kitchen@bilhanah.local';
 const KITCHEN_PASSWORD = 'demo-kitchen-1';
 const CASHIER_EMAIL = 'demo-cashier@bilhanah.local';
 const CASHIER_PASSWORD = 'demo-cashier-1';
+const CASHIER_PIN = '1234';
 const MEDIA = resolve(import.meta.dirname, 'demo-media');
 const reset = process.argv.includes('--reset');
 
@@ -159,6 +161,13 @@ if (!kitchens.some((account) => account.email === CASHIER_EMAIL)) {
   await api('POST', '/kitchen-accounts', {
     fullName: 'كاشير تجريبي', email: CASHIER_EMAIL, password: CASHIER_PASSWORD, role: 'CASHIER', permissions: ['payments.refund', 'cash.adjust'],
   });
+}
+
+// The cashier's POS PIN, for quick sign-in on a registered device.
+const cashierAccount = (await api('GET', '/kitchen-accounts')).data.find((account) => account.email === CASHIER_EMAIL);
+if (cashierAccount && !cashierAccount.hasPin) {
+  console.log('Setting the demo cashier PIN…');
+  await api('PUT', `/kitchen-accounts/${cashierAccount.id}/pin`, { pin: CASHIER_PIN });
 }
 
 // French and Russian on top of Arabic and English, and calories and portions

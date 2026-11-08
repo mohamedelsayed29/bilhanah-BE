@@ -10,14 +10,16 @@ import { PosIntegrationsService } from './pos-integrations.service.js';
 import { PosIntegrationsController, PosWebhooksController } from './pos-integrations.controller.js';
 import { PosSyncModule } from '../pos-sync/pos-sync.module.js';
 import { PosAccessService } from './pos-access.service.js';
+import { PosAuthService } from './pos-auth.service.js';
+import { PosDeviceController } from './pos-device.controller.js';
 import { AdminPosController, PosController } from './pos.controller.js';
 import { PosService } from './pos.service.js';
 
 /** Point of sale (docs/POS.md). Later POS parts check access through PosAccessService. */
 @Module({
   imports: [AuthModule, AuditModule, SubscriptionsModule, OrdersModule, PosSyncModule],
-  controllers: [PosController, AdminPosController, PosIntegrationsController, PosWebhooksController],
-  providers: [PosAccessService, PosService, PosOrdersService, PosTerminalService, PosIntegrationsService, PosReportsService],
+  controllers: [PosDeviceController, PosController, AdminPosController, PosIntegrationsController, PosWebhooksController],
+  providers: [PosAccessService, PosAuthService, PosService, PosOrdersService, PosTerminalService, PosIntegrationsService, PosReportsService],
   exports: [PosAccessService],
 })
 export class PosModule {}

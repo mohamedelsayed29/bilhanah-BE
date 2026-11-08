@@ -1,6 +1,6 @@
 import { ConflictException, Injectable } from '@nestjs/common';
 import {
-  DEFAULT_POS_SETTINGS, POS_ERROR_CODES, type PlanCode, type PosDisabledReason, type PosMode, type PosOverview, type PosSettings, type PosStatus,
+  DEFAULT_POS_SETTINGS, POS_DEVICE_LIMITS, POS_ERROR_CODES, type PlanCode, type PosDisabledReason, type PosMode, type PosOverview, type PosSettings, type PosStatus,
 } from '@bilhanah/contracts';
 import type { PosAccount, Prisma, RestaurantStatus } from '@bilhanah/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
@@ -52,8 +52,9 @@ export class PosAccessService {
   }
 
   async overview(restaurant: Restaurant): Promise<PosOverview & { account: PosAccount | null }> {
-    const [platform, planCode, account] = await Promise.all([
+    const [platform, planCode, account, devicesInUse] = await Promise.all([
       this.platform(), this.planCode(restaurant), this.prisma.posAccount.findUnique({ where: { restaurantId: restaurant.id } }),
+      this.prisma.posDevice.count({ where: { restaurantId: restaurant.id, status: { in: ['ACTIVE', 'DISABLED'] } } }),
     ]);
     const { status, disabledReason } = posStatus(platform, planCode, account);
     return {
@@ -67,6 +68,8 @@ export class PosAccessService {
       setupCompletedAt: account?.setupCompletedAt?.toISOString() ?? null,
       settings: settingsOf(account),
       updatedAt: account?.updatedAt.toISOString() ?? null,
+      maxDevices: account?.maxDevices ?? POS_DEVICE_LIMITS.default,
+      devicesInUse,
     };
   }
 

@@ -80,7 +80,8 @@ describe('reviews inbox', () => {
     expect(await filter('?q=quick')).toEqual([nasr.reviewId]);
     expect(await filter('?q=delicious')).toEqual([good.reviewId]);
     expect(await filter(`?q=%23${placed.number}`)).toContain(low.reviewId);
-    const today = new Date().toISOString().slice(0, 10);
+    // The restaurant's day (Africa/Cairo), not UTC's: they differ for two hours after midnight.
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
     expect(await filter(`?from=${today}&to=${today}`)).toHaveLength(3);
     expect(await filter('?from=2020-01-01&to=2020-01-31')).toEqual([]);
     expect(ids((await inbox(r.token, '?pageSize=2&page=2').expect(200)).body)).toEqual([low.reviewId]);

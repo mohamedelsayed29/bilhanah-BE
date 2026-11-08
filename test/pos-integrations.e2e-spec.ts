@@ -45,9 +45,15 @@ async function setup(subdomain = 'koshary', mode = 'BOTH') {
   await http().put('/v1/pos/settings').set(auth(token)).send(SETTINGS).expect(200);
   const category = await http().post('/v1/menu/categories').set(auth(token)).send({ nameAr: 'رئيسي' }).expect(201);
   const item = (await http().post('/v1/menu/items').set(auth(token)).send({ categoryId: category.body.id, nameAr: 'كشري', variants: [{ pricePiastres: 5000 }] }).expect(201)).body;
+  // POS orders run on a registered device (one per restaurant here), found again by the owner's token.
+  if (mode !== 'EXTERNAL') {
+    const branchId = (await http().get('/v1/branches').set(auth(token)).expect(200)).body.branches[0].id as string;
+    devices.set(token, (await http().post('/v1/pos/devices').set(auth(token)).send({ name: 'Counter', branchId }).expect(201)).body.deviceKey as string);
+  }
   return { token, id: created.body.id as string, admin, line: { menuItemId: item.id as string, variantId: item.variants[0].id as string, quantity: 2 } };
 }
-const posOrder = (token: string, line: unknown) => http().post('/v1/pos/orders').set(auth(token)).set('Idempotency-Key', `o-${Math.random().toString(36).slice(2, 12)}`).send({ type: 'PICKUP', items: [line] });
+const devices = new Map<string, string>();
+const posOrder = (token: string, line: unknown) => http().post('/v1/pos/orders').set(auth(token)).set('X-Pos-Device', devices.get(token) ?? '').set('Idempotency-Key', `o-${Math.random().toString(36).slice(2, 12)}`).send({ type: 'PICKUP', items: [line] });
 let tick = 0;
 /** Each run is two hours later than the last, past any backoff. */
 const run = () => t.app.get(PosSyncService).runDue(new Date(Date.now() + (tick += 1) * 2 * 60 * 60 * 1000));

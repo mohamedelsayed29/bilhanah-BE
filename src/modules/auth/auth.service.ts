@@ -240,6 +240,14 @@ export class AuthService {
     return this.startSession(user, meta, remember);
   }
 
+  /**
+   * A session started by a POS PIN on a registered device (PosAuthService has checked the device, the PIN
+   * and the account). Not remembered: it ends with the browser session and lasts at most a day.
+   */
+  startPosSession(user: User, meta: ClientMeta): Promise<IssuedSession> {
+    return this.startSession(user, meta, false);
+  }
+
   private async startSession(user: User, meta: ClientMeta, remember: boolean | null = null): Promise<IssuedSession> {
     const secret = generateToken();
     const now = new Date();

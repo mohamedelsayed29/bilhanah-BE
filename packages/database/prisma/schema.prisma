@@ -79,6 +79,10 @@ model User {
   fullName          String     @map("full_name")
   preferredLanguage Language   @default(ar) @map("preferred_language")
   role              UserRole   @default(OWNER)
+  /// Quick sign-in on a registered POS device (staff only): the PIN's hash, and brute-force protection.
+  posPinHash           String?   @map("pos_pin_hash")
+  posPinFailedAttempts Int       @default(0) @map("pos_pin_failed_attempts")
+  posPinLockedUntil    DateTime? @map("pos_pin_locked_until") @db.Timestamptz(3)
   status            UserStatus @default(ACTIVE)
   emailVerifiedAt   DateTime?  @map("email_verified_at") @db.Timestamptz(3)
   passwordChangedAt DateTime?  @map("password_changed_at") @db.Timestamptz(3)
@@ -3511,6 +3515,8 @@ model PosAccount {
   receiptHeader             String?   @map("receipt_header") @db.VarChar(200)
   receiptFooter             String?   @map("receipt_footer") @db.VarChar(300)
   receiptShowLogo           Boolean   @default(true) @map("receipt_show_logo")
+  /// How many POS devices may be ACTIVE or DISABLED at once (set by the platform administrator).
+  maxDevices                Int       @default(3) @map("max_devices")
   createdAt                 DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                 DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -3582,6 +3588,9 @@ model OrderPaymentRefund {
 
 enum PosDeviceStatus {
   ACTIVE
+  /// Paused by the owner or an administrator; can be switched back on.
+  DISABLED
+  /// Permanently withdrawn; its key never works again.
   REVOKED
 }
 
@@ -3599,6 +3608,9 @@ model PosDevice {
   createdById  String?         @map("created_by_id") @db.Uuid
   createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
   revokedAt    DateTime?       @map("revoked_at") @db.Timestamptz(3)
+  /// sha256 of a short one-time code that pairs a new device (typed on it); cleared once used.
+  pairingCodeHash  String?     @unique @map("pairing_code_hash") @db.VarChar(64)
+  pairingExpiresAt DateTime?   @map("pairing_expires_at") @db.Timestamptz(3)
 
   restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
