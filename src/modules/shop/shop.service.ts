@@ -281,7 +281,7 @@ export class ShopService {
 
   /** The customer's order page on the website. */
   orderUrl(orderId: string): string {
-    return `${this.websiteUrl}/shop/orders/${this.tokens.issue(orderId)}`;
+    return `${this.websiteUrl}/products/orders/${this.tokens.issue(orderId)}`;
   }
 
   private placed(order: StandOrderRow, checkoutUrl: string | null): PlaceStandOrderResponse {

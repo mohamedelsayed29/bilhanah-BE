@@ -126,7 +126,7 @@ describe('the shop checkout', () => {
     expect(placed.body.order).not.toHaveProperty('address');
 
     expect(t.mailer.lastTo('mona@cafe.test')?.subject).toBe(`طلبك ${placed.body.order.reference} وصلنا`);
-    expect(t.mailer.lastTo('mona@cafe.test')?.text).toContain(`https://bilhanah.test/shop/orders/${placed.body.trackingToken}`);
+    expect(t.mailer.lastTo('mona@cafe.test')?.text).toContain(`https://bilhanah.test/products/orders/${placed.body.trackingToken}`);
     expect(t.mailer.lastTo('admin@bilhanah.test')?.subject).toBe(`طلب حوامل جديد ${placed.body.order.reference}`);
 
     // A retried submission returns the same order without new emails.
@@ -188,7 +188,7 @@ describe('online stand orders', () => {
     expect(paymob.intentions[0]!.body).toMatchObject({
       amount: 147500,
       billing_data: { first_name: 'Mona', last_name: 'Adel', phone_number: '01098765432', city: 'Alexandria' },
-      redirection_url: `https://bilhanah.test/shop/orders/${placed.body.trackingToken}`,
+      redirection_url: `https://bilhanah.test/products/orders/${placed.body.trackingToken}`,
     });
     // Nobody is told about an unpaid order.
     expect(t.mailer.sent).toHaveLength(0);

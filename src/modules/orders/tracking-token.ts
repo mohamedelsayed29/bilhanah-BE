@@ -46,7 +46,7 @@ export const trackingTokensProvider: FactoryProvider<TrackingTokens> = {
     new TrackingTokens(config.get('DATA_ENCRYPTION_KEY', { infer: true }) ?? config.get('JWT_ACCESS_SECRET', { infer: true })),
 };
 
-/** Stand-shop order links (/shop/orders/<token>): same scheme, separate key. */
+/** Stand-shop order links (/products/orders/<token>): same scheme, separate key. */
 export const STAND_ORDER_TOKENS = Symbol('STAND_ORDER_TOKENS');
 
 export const standOrderTokensProvider: FactoryProvider<TrackingTokens> = {
